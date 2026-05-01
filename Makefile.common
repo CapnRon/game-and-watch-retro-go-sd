@@ -1079,7 +1079,7 @@ endif
 SD_FOLDER := sd_content
 CORES_DIR := $(SD_FOLDER)/cores
 FONTS_DIR := $(SD_FOLDER)/fonts
-UNICODE_FONT_SOURCE ?= assets/fonts/NotoSansCJK-Regular.otf
+UNICODE_FONT_SOURCE ?= assets/fonts/fusion-pixel-12px-monospaced-zh_hant.ttf
 UNICODE_FONT_SCRIPTS := greek math_operators geometric misc_symbols cjk_punct hiragana katakana cjk hangul fullwidth
 UNICODE_FONT_BINS := $(addprefix $(FONTS_DIR)/unicode_, $(addsuffix .bin, $(UNICODE_FONT_SCRIPTS)))
 MAPPERS_DIR := $(CORES_DIR)/mappers

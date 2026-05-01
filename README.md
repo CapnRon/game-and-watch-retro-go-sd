@@ -629,6 +629,6 @@ Please join the [Discord](https://discord.gg/vVcwrrHTNJ).
 
 ## License
 
-This project uses Noto Sans CJK (SIL Open Font License 1.1)
+This project uses Fusion Pixel Font (SIL Open Font License 1.1)
 
 This project is licensed under the GPLv2. Some components are available under the MIT license. Respective copyrights apply to each component.
