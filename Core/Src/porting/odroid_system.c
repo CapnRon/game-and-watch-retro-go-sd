@@ -464,13 +464,18 @@ void odroid_system_switch_app(int app)
         }
 
         void _boot_bank2(void) {
-            uint32_t sp = *((uint32_t *)FLASH_BANK2_BASE);
-            uint32_t pc = *((uint32_t *)FLASH_BANK2_BASE + 1);
+            /* sp/pc must live in callee-saved registers across HAL_MPU_Disable.
+             * If the compiler spills them to the (caller-saved) stack, the
+             * subsequent __set_MSP() switches the stack and the reload
+             * reads garbage from the new stack (out-of-DTCM at 0x20020004
+             * which is 0 → bx 0 → fault). Forcing r6/r7 keeps them safe
+             * regardless of optimisation level / register pressure. */
+            register uint32_t sp asm("r6") = *((uint32_t *)FLASH_BANK2_BASE);
+            register uint32_t pc asm("r7") = *((uint32_t *)FLASH_BANK2_BASE + 1);
 
-            // Check that Bank 2 content is valid
+            HAL_MPU_Disable();
             __set_MSP(sp);
             __set_PSP(sp);
-            HAL_MPU_Disable();
             _start_app((void (*const)(void))pc, (uint32_t)sp);
         }
 
