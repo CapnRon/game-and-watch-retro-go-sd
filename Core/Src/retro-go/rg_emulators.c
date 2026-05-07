@@ -49,6 +49,11 @@
 // changes
 #define INTERNAL_CORE_HEADER_VERSION ((uint16_t)(INTERNAL_CORE_BIN_HEADER_VERSION))
 
+// Minimum version accepted for external cores (e.g. pico8.bin). Bump when
+// the engine binary's runtime ABI changes in a way that requires users to
+// update the engine — older binaries are rejected with a clear message.
+#define EXTERNAL_CORE_HEADER_MIN_VERSION ((uint16_t)1u)
+
 static const char *get_extension(const char *filename);
 
 static uint16_t read_u16_le(const uint8_t *p)
@@ -158,7 +163,14 @@ static size_t load_core_bin_with_header(const char *file_path, uint8_t *dest_add
       return 0;
     }
   } else {
-    printf("CORE: external core header version %u ignored\n", (unsigned)header_version);
+    if (header_version < EXTERNAL_CORE_HEADER_MIN_VERSION) {
+      printf("CORE: external core '%s' has header version %u — please update the engine binary (need >= %u)\n",
+             file_path, (unsigned)header_version, (unsigned)EXTERNAL_CORE_HEADER_MIN_VERSION);
+      free(header_data);
+      fclose(file);
+      show_corrupted_installation_screen();
+      return 0;
+    }
     free(header_data);
   }
 
