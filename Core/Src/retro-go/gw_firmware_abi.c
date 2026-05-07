@@ -235,4 +235,7 @@ const gw_firmware_abi_t g_firmware_abi = {
     .dtcm_p8ram_start          = NULL,  /* no longer a fixed section — use dtcm_malloc */
 
     .dtcm_malloc               = malloc,
+
+    .odroid_system_emu_load_state = odroid_system_emu_load_state,
+    .odroid_audio_mute            = odroid_audio_mute,
 };

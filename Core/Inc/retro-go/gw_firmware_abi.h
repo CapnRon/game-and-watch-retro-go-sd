@@ -294,6 +294,16 @@ typedef struct {
      * Freed implicitly by heap watermark reset between emulator launches. */
     void                       *(*dtcm_malloc)(size_t size);
 
+    /* v1 append: deferred state load. Engine calls this from main loop AFTER
+     * the first frame body so cart_co is in a stable post-init state. Routed
+     * through ABI (not a direct call) so future firmware can change the
+     * savestate-path/handler logic without an engine rebuild. */
+    bool                        (*odroid_system_emu_load_state)(int slot);
+
+    /* v1 append: audio mute toggle. Engine calls this when entering
+     * start_paused state. Routed through ABI for the same reason. */
+    void                        (*odroid_audio_mute)(bool mute);
+
 } gw_firmware_abi_t;
 
 /* The firmware publishes this instance at GW_FIRMWARE_ABI_ADDRESS via the
