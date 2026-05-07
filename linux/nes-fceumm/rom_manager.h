@@ -3,9 +3,6 @@
 typedef struct rom_system_t rom_system_t;
 
 typedef struct {
-#if CHEAT_CODES == 1
-    uint32_t id;
-#endif
     const char *name;
     const char *ext;
     // char folder[32];
@@ -25,6 +22,7 @@ typedef struct {
     const rom_system_t *system;
     uint16_t game_config;
 #if CHEAT_CODES == 1
+    uint32_t id;
     const char** cheat_codes; // Cheat codes to choose from
     const char** cheat_descs; // Cheat codes descriptions
     int cheat_count;

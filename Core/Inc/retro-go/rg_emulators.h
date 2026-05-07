@@ -31,9 +31,6 @@ typedef enum
 } img_state_t;
 
 typedef struct {
-#if CHEAT_CODES == 1
-    uint32_t id;
-#endif
     char name[256];
     const char *ext;
     char path[256];
@@ -46,6 +43,7 @@ typedef struct {
     rom_region_t region;
     const rom_system_t *system;
 #if CHEAT_CODES == 1
+    uint32_t id;
     char** cheat_codes; // Cheat codes to choose from
     char** cheat_descs; // Cheat codes descriptions
     int cheat_count;
