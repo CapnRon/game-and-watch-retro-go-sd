@@ -18,6 +18,9 @@ ROMS_VIDEOPAC :=
 ######################################
 # C sources
 C_SOURCES =  \
+Core/Src/porting/lib/lz4_depack.c \
+Core/Src/porting/lib/lzma/LzmaDec.c \
+Core/Src/porting/lib/lzma/lzma.c \
 Core/Src/bilinear.c \
 Core/Src/cpp_init_array.c \
 Core/Src/gw_buttons.c \
@@ -505,9 +508,6 @@ CORE_GW = external/LCD-Game-Emulator
 #TODO : change linking so lz4/lzma libraries are in LCD emulator section
 #       and not in internal flash
 GW_C_SOURCES += \
-Core/Src/porting/lib/lz4_depack.c \
-Core/Src/porting/lib/lzma/LzmaDec.c \
-Core/Src/porting/lib/lzma/lzma.c \
 $(CORE_GW)/src/cpus/sm500op.c \
 $(CORE_GW)/src/cpus/sm510op.c \
 $(CORE_GW)/src/cpus/sm500core.c \

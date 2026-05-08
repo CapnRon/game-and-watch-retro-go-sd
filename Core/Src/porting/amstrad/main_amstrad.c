@@ -19,6 +19,7 @@
 #define AUDIO_BUFFER_LENGTH_AMSTRAD  (AMSTRAD_SAMPLE_RATE / AMSTRAD_FPS)
 
 #define AMSTRAD_DISK_EXTENSION "dsk"
+#define AMSTRAD_COMPRESSED_DISK_EXTENSION "cdk"
 
 static void blit(uint8_t *src_fb, uint16_t *framebuffer);
 
@@ -1078,7 +1079,8 @@ void app_main_amstrad(uint8_t load_state, uint8_t start_paused, int8_t save_slot
     capmain(0, NULL);
     amstrad_set_audio_buffer((int8_t *)soundBuffer, sizeof(soundBuffer));
 
-    if (0 == strcmp(ACTIVE_FILE->ext, AMSTRAD_DISK_EXTENSION))
+    if (0 == strcmp(ACTIVE_FILE->ext, AMSTRAD_DISK_EXTENSION) ||
+        0 == strcmp(ACTIVE_FILE->ext, AMSTRAD_COMPRESSED_DISK_EXTENSION))
     {
         strcpy(current_disk_path, ACTIVE_FILE->path);
         attach_disk(current_disk_path, 0);

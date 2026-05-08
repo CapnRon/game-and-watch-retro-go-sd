@@ -55,7 +55,7 @@ bool rg_rom_list_arg_is_parent(const void *arg);
 typedef struct {
     char system_name[32];
     char dirname[16];
-    char exts[16];
+    char exts[32];
 	#if COVERFLOW != 0
     size_t cover_width;
     size_t cover_height;

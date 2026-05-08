@@ -21,6 +21,7 @@
 #include "gw_malloc.h"
 #include "odroid_overlay.h"
 #include "rg_storage.h"
+#include "rg_frogfs.h"
 
 #define NES_WIDTH  256
 #define NES_HEIGHT 240
@@ -559,42 +560,47 @@ static void update_sound_nes(int32_t *sound, uint16_t size) {
         sound_buffer[i] = ((sample * factor) >> 8) & 0xFFFF;
     }
 }
+extern uint32_t __RAM_EMU_END__;
 
 static size_t nes_getromdata(unsigned char **data)
 {
+    uint32_t size = ACTIVE_FILE->size; 
 #ifndef GNW_DISABLE_COMPRESSION
-    wdog_refresh();
+#if SD_CARD == 1
+#error "Roms compression is not supported on SD Card"
+#else
     unsigned char *dest = (unsigned char *)&_OVERLAY_NES_FCEU_BSS_END;
-    /* src pointer to the ROM data in the external flash (raw or LZ4) */
-    const unsigned char *src = ROM_DATA;
-    uint32_t available_size = (uint32_t)0x00080010; // Max size of a compressedNES ROM
-
-    if(strcmp(ROM_EXT, "lzma") == 0){
-        size_t n_decomp_bytes;
-        n_decomp_bytes = lzma_inflate(dest, available_size, src, ROM_DATA_LENGTH);
+    ram_start = (uint32_t)dest;
+    // We do not use ram_get_free_size as we may want to update ram_start after
+    uint32_t free_ram = ((uint32_t)&__RAM_EMU_END__) - ram_start;
+    if(strcmp(ACTIVE_FILE->ext, "lzma") == 0) {
+        printf("Decompressing NES ROM...\n");
+        uint32_t src_size = size;
+        const unsigned char *src;
+        rg_frogfs_get_file_data(ACTIVE_FILE->path, &src, &src_size);
+        size_t n_decomp_bytes = lzma_inflate(dest, free_ram, src, src_size);
         *data = dest;
-        ram_start = (uint32_t)dest + n_decomp_bytes;
+        ram_start += n_decomp_bytes;
         return n_decomp_bytes;
-    }
-    else
-    {
+    } else {
         // FDS disks has to be stored in ram for games
         // that want to write to the disk
-        if (ROM_DATA_LENGTH <= 262000) {
-            memcpy(dest, ROM_DATA, ROM_DATA_LENGTH);
+        if (size <= 262000) {
+            uint32_t src_size;
+            const unsigned char *src;
+            rg_frogfs_get_file_data(ACTIVE_FILE->path, &src, &src_size);
+            memcpy(dest, src, src_size);
             *data = (unsigned char *)dest;
-            ram_start = (uint32_t)dest + ROM_DATA_LENGTH;
+            ram_start = (uint32_t)dest + src_size;
+            return src_size;
         } else {
-            *data = (unsigned char *)ROM_DATA;
-            ram_start = (uint32_t)dest;
+            rg_frogfs_get_file_data(ACTIVE_FILE->path, (const uint8_t **)data, &size);
+            return size;
         }
-
-        return ROM_DATA_LENGTH;
     }
+#endif
 #else
     ram_start = (uint32_t)&_OVERLAY_NES_FCEU_BSS_END;
-    uint32_t size = 0;
-    size = ACTIVE_FILE->size;
     if (size > ram_get_free_size()) {
         *data = odroid_overlay_cache_file_in_flash(ACTIVE_FILE->path, &size, false);
     } else {
@@ -868,6 +874,11 @@ int app_main_nes_fceu(uint8_t load_state, uint8_t start_paused, int8_t save_slot
     XBuf = nes_framebuffer;
 
     palettes_count = get_palettes_count();
+
+    // We allocate 4 bytes in itc RAM to prevent FCEU_gmalloc to return 0x00 for the first
+    // allocation (as itc RAM is starting at 0x00000000) as it can cause a lot of problems
+    // due to the way FCEUmm works.
+    itc_malloc(4);
 
     FCEUI_Initialize();
 

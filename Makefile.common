@@ -20,6 +20,14 @@ LARGE_FLASH ?= 0
 # Set to 0 to disable sd card support
 SD_CARD ?= 1
 
+# Docker image for reproducible ARM builds (see targets docker, docker_build).
+DOCKER_IMAGE ?= sylverb/retro-go-sd-builder:v1.4
+DOCKER_RUN := docker run --rm -it --privileged --network host \
+	--user $(shell id -u):$(shell id -g) \
+	-v $(CURDIR):/opt/workdir \
+	-v /dev/bus/usb:/dev/bus/usb \
+	$(DOCKER_IMAGE)
+
 # Configure where data is stored in the external flash by
 # setting EXTFLASH_OFFSET. Useful if the first 1MB/4MB are to be preserved.
 EXTFLASH_OFFSET ?= 0
@@ -319,7 +327,10 @@ C_INCLUDES += \
 -I$(FROGFS_DIR)/src \
 -ICore/Src/porting/lib/littlefs/ \
 -ICore/Src/porting/lib/tamp/tamp/_c_src
-C_DEFS += -DGNW_DISABLE_COMPRESSION # not supported for now
+# LZMA ROM payloads (FrogFS --rom-compression) need inflate; COMPRESS=0 disables to save code size.
+ifeq ($(COMPRESS),0)
+C_DEFS += -DGNW_DISABLE_COMPRESSION
+endif
 endif
 
 #######################################
@@ -1278,13 +1289,17 @@ FROGFS_PICO8_FLAGS := $(if $(filter 0,$(SD_CARD)),\
 	--bundle-pico8-ro-in-frogfs --extflash-base 0x90000000 --extflash-offset $(EXTFLASH_OFFSET),)
 LITTLEFS_OMIT_PICO8_RO := $(if $(filter 0,$(SD_CARD)),--omit-pico8-ro-from-gnw-zip,)
 
-$(FROGFS_IMAGE): create_sd_data scripts/gen_frogfs_image.py scripts/frogfs_pico8_ro.py scripts/pico8_ro_build_patch.py scripts/pico8_gnw_cores.py scripts/sd_cores_pack.py tools/gencovers.py external/zelda3/tables/restool.py external/smw/assets/restool.py $(FROGFS_DIR)/tools/mkfrogfs.py
+# SD_CARD=0: optional FrogFS ROM LZMA pack (scripts/rom_frogfs_lzma.py); align with COMPRESS=lzma.
+FROGFS_ROM_LZMA_FLAGS := $(if $(filter 0,$(SD_CARD)),$(if $(filter-out 0,$(COMPRESS)),--rom-compression $(COMPRESS),),)
+
+$(FROGFS_IMAGE): create_sd_data scripts/gen_frogfs_image.py scripts/rom_frogfs_lzma.py scripts/frogfs_pico8_ro.py scripts/pico8_ro_build_patch.py scripts/pico8_gnw_cores.py scripts/sd_cores_pack.py tools/gencovers.py external/zelda3/tables/restool.py external/smw/assets/restool.py $(FROGFS_DIR)/tools/mkfrogfs.py
 	$(V)$(PYTHON3) scripts/gen_frogfs_image.py \
 		--sd-content $(SD_FOLDER) \
 		--output $@ \
 		--build-dir $(FROGFS_BUILD_DIR) \
 		--reserve-size $(EXTFLASH_TOTAL_LENGTH) \
-		$(FROGFS_PICO8_FLAGS)
+		$(FROGFS_PICO8_FLAGS) \
+		$(FROGFS_ROM_LZMA_FLAGS)
 
 frogfs_image: $(FROGFS_IMAGE)
 .PHONY: frogfs_image
@@ -1391,13 +1406,21 @@ dump_screenshot:
 .PHONY: dump_screenshot
 
 docker_build:
-	$(V)docker build --network=host -f Dockerfile --tag sylverb/retro-go-sd-builder .
+	$(V)docker build --network=host -f Dockerfile --tag $(DOCKER_IMAGE) .
 .PHONY: docker_build
 
 docker:
-	$(V)docker run --rm -it --privileged --network host --user $(shell id -u):$(shell id -g) -v $(PWD):/opt/workdir -v /dev/bus/usb:/dev/bus/usb sylverb/retro-go-sd-builder:v1.3 \
-	bash -l -c "make -j\$$(nproc) CHECK_DIRTY_SUBMODULE=0 COVERFLOW=1 SHARED_HIBERNATE_SAVESTATE=1 DISABLE_SPLASH_SCREEN=1 INTFLASH_BANK=2 CHEAT_CODES=1 ZH_CN=1 ZH_TW=1 KO_KR=1 JA_JP=1 release"
+ifeq ($(SD_CARD),0)
+	$(V)$(DOCKER_RUN) bash -l
+else
+	$(V)$(DOCKER_RUN) bash -l -c "make -j\$$(nproc) CHECK_DIRTY_SUBMODULE=0 COVERFLOW=1 SHARED_HIBERNATE_SAVESTATE=1 DISABLE_SPLASH_SCREEN=1 INTFLASH_BANK=2 CHEAT_CODES=1 ZH_CN=1 ZH_TW=1 KO_KR=1 JA_JP=1 release"
+endif
 .PHONY: docker
+
+# Interactive shell without building release (handy when SD_CARD=1 but you only want the container).
+docker_shell:
+	$(V)$(DOCKER_RUN) bash -l
+.PHONY: docker_shell
 
 help:
 	@echo "Game and Watch Retro Go SD"
@@ -1422,7 +1445,8 @@ help:
 	@echo "  INTFLASH_BANK       - Sets the internal flash bank. Valid values {1,2} (default=1)."
 	@echo "  INTFLASH_ADDRESS    - Explicit internal flash address. If not provided, derived from INTFLASH_BANK."
 	@echo "  BIG_BANK            - Use internal flash bank as undocumented 256k.(default=1, set 0 to 128k)."
-	@echo "  COMPRESS            - Configures ROM compression, Valid values {0,lzma} (default=lzma)."
+	@echo "  COMPRESS            - ROM compression: 0 or lzma (default=lzma). SD_CARD=0: FrogFS uses"
+	@echo "                        LZMA ROM payloads unless COMPRESS=0 (saves extflash; needs decoder in fw)."
 	@echo "  RESET_DBGMCU        - Configures if DBGMCU should be reset after flashing."
 	@echo "                        Set to 0 to disable power saving (default=1)"
 	@echo "  CODEPAGE            - Sets codepage to configures default display language.(default=1252)"
@@ -1483,7 +1507,8 @@ help:
 	@echo "  SINGLE_FONT=$(SINGLE_FONT)"
 	@echo ""
 	@echo "Targets:"
-	@echo "  docker            - Runs a docker container using the image created by docker_build"
+	@echo "  docker            - SD_CARD=0: interactive shell in $(DOCKER_IMAGE); SD_CARD=1: run preset release build inside container"
+	@echo "  docker_shell      - Interactive shell in $(DOCKER_IMAGE) (no preset make; same mounts as docker)"
 	@echo "  docker_build      - Builds a docker image"
 	@echo "  dump_screenshot   - Downloads the stored screenshot."
 	@echo "  flash             - Programs the internal and external flash"

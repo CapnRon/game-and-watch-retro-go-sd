@@ -985,7 +985,7 @@ void gui_draw_coverlight_v(retro_emulator_file_t *file, int cover_position)
 
     /* draw cover art or grey box */
     if (file->img_state == IMG_STATE_NO_COVER)
-        odroid_overlay_draw_fill_rect(cover_x + COVER_BORDER, cover_y + COVER_BORDER, cover_width, cover_height, get_darken_pixel(C_GRAY, 100 * cover_light3[cover_position] / 255));
+        odroid_overlay_draw_fill_rect(cover_x + COVER_BORDER, cover_y + COVER_BORDER, cover_width, cover_height, get_darken_pixel(C_GRAY, 100 * cover_light3[-cover_position] / 255));
 
     /* display the cover art */
     else
@@ -1002,7 +1002,7 @@ void gui_draw_coverlight_v(retro_emulator_file_t *file, int cover_position)
     else
     {
         odroid_overlay_draw_rect(cover_x + 4, cover_y + 4, cover_width + 4, cover_height + 4, 2, curr_colors->bg_c);
-        odroid_overlay_draw_rect(5 + cover_x, 5 + cover_y, cover_width + 2, cover_height + 2, 1, get_darken_pixel_d(curr_colors->sel_c, curr_colors->bg_c, 100 * cover_light3[cover_position] / 255));
+        odroid_overlay_draw_rect(5 + cover_x, 5 + cover_y, cover_width + 2, cover_height + 2, 1, get_darken_pixel_d(curr_colors->sel_c, curr_colors->bg_c, 100 * cover_light3[-cover_position] / 255));
     }
 }
 

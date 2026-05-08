@@ -169,12 +169,47 @@ int odroid_overlay_draw_text(uint16_t x_pos, uint16_t y_pos, uint16_t width, con
     return height;
 }
 
+/* Clip axis-aligned rect to LCD; returns false if nothing remains visible. */
+static bool odroid_overlay_clip_rect_to_lcd(int *x, int *y, int *w, int *h)
+{
+    int x0 = *x;
+    int y0 = *y;
+    int x1 = *x + *w;
+    int y1 = *y + *h;
+    if (x0 < 0)
+        x0 = 0;
+    if (y0 < 0)
+        y0 = 0;
+    if (x1 > GW_LCD_WIDTH)
+        x1 = GW_LCD_WIDTH;
+    if (y1 > GW_LCD_HEIGHT)
+        y1 = GW_LCD_HEIGHT;
+    if (x0 >= x1 || y0 >= y1)
+        return false;
+    *x = x0;
+    *y = y0;
+    *w = x1 - x0;
+    *h = y1 - y0;
+    return true;
+}
+
 void odroid_overlay_draw_rect(int x, int y, int width, int height, int border, uint16_t color)
 {
     if (width == 0 || height == 0 || border == 0)
         return;
 
+    if (width < border || height < border)
+        return;
+
+    if (!odroid_overlay_clip_rect_to_lcd(&x, &y, &width, &height))
+        return;
+
+    if (width < border || height < border)
+        return;
+
     uint16_t *fb = lcd_get_active_buffer();
+    if (!fb)
+        return;
 
     // Top and bottom edges
     for (int by = 0; by < border; by++) {
@@ -200,7 +235,12 @@ void odroid_overlay_draw_fill_rect(int x, int y, int width, int height, uint16_t
     if (width == 0 || height == 0)
         return;
 
+    if (!odroid_overlay_clip_rect_to_lcd(&x, &y, &width, &height))
+        return;
+
     uint16_t *fb = lcd_get_active_buffer();
+    if (!fb)
+        return;
 
     for (int row = y; row < y + height; row++) {
         uint16_t *dst = &fb[row * ODROID_SCREEN_WIDTH + x];

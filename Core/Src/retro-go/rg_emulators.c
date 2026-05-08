@@ -1150,7 +1150,8 @@ void emulator_start(retro_emulator_file_t *file, bool load_state, bool start_pau
     // Copy game data from SD card to flash if needed
     // dsk files are read from sd card, do not copy them in flash
     // With FrogFS, this maps the file directly from external flash
-    if ((newfile->system->game_data_type != NO_GAME_DATA) && (strcasecmp(newfile->ext, "dsk") !=0)) {
+    if ((newfile->system->game_data_type != NO_GAME_DATA) &&
+        (strcasecmp(newfile->ext, "dsk") != 0) && (strcasecmp(newfile->ext, "cdk") != 0)) {
         newfile->address = odroid_overlay_cache_file_in_flash(newfile->path, &(newfile->size), newfile->system->game_data_type == GAME_DATA_BYTESWAP_16);
         ROM_DATA = newfile->address;
         ROM_EXT = newfile->ext;
@@ -1366,7 +1367,10 @@ void emulator_start(retro_emulator_file_t *file, bool load_state, bool start_pau
     if (newfile->cheat_codes) free(newfile->cheat_codes);
     if (newfile->cheat_descs) free(newfile->cheat_descs);
 #endif
+#ifdef GNW_DISABLE_COMPRESSION
+// we need to keep extension for compression detection
     free(newfile);
+#endif
 
     ahb_init();
     itc_init();
@@ -1379,22 +1383,22 @@ void emulator_start(retro_emulator_file_t *file, bool load_state, bool start_pau
 
 void emulators_init()
 {
-    add_emulator("Nintendo Gameboy", "gb", "gb gbc", RG_LOGO_PAD_GB, RG_LOGO_HEADER_GB, NO_GAME_DATA);
-    add_emulator("Nintendo Gameboy Color", "gbc", "gb gbc", RG_LOGO_PAD_GB, RG_LOGO_HEADER_GBC, NO_GAME_DATA);
-    add_emulator("Nintendo Entertainment System", "nes", "nes fds nsf", RG_LOGO_PAD_NES, RG_LOGO_HEADER_NES, NO_GAME_DATA);
+    add_emulator("Nintendo Gameboy", "gb", "gb gbc lzma", RG_LOGO_PAD_GB, RG_LOGO_HEADER_GB, NO_GAME_DATA);
+    add_emulator("Nintendo Gameboy Color", "gbc", "gb gbc lzma", RG_LOGO_PAD_GB, RG_LOGO_HEADER_GBC, NO_GAME_DATA);
+    add_emulator("Nintendo Entertainment System", "nes", "nes fds nsf lzma", RG_LOGO_PAD_NES, RG_LOGO_HEADER_NES, NO_GAME_DATA);
     add_emulator("Game & Watch", "gw", "gw", RG_LOGO_PAD_GW, RG_LOGO_HEADER_GW, NO_GAME_DATA);
-    add_emulator("PC Engine", "pce", "pce", RG_LOGO_PAD_PCE, RG_LOGO_HEADER_PCE, NO_GAME_DATA);
-    add_emulator("Sega Game Gear", "gg", "gg", RG_LOGO_PAD_GG, RG_LOGO_HEADER_GG, NO_GAME_DATA);
-    add_emulator("Sega Master System", "sms", "sms", RG_LOGO_PAD_SMS, RG_LOGO_HEADER_SMS, NO_GAME_DATA);
-    add_emulator("Sega Genesis", "md", "md gen bin", RG_LOGO_PAD_GEN, RG_LOGO_HEADER_GEN, GAME_DATA_BYTESWAP_16);
-    add_emulator("Sega SG-1000", "sg", "sg", RG_LOGO_PAD_SG1000, RG_LOGO_HEADER_SG1000, NO_GAME_DATA);
-    add_emulator("Colecovision", "col", "col", RG_LOGO_PAD_COL, RG_LOGO_HEADER_COL, NO_GAME_DATA);
-    add_emulator("Watara Supervision", "wsv", "wsv sv bin", RG_LOGO_PAD_WSV, RG_LOGO_HEADER_WSV, NO_GAME_DATA);
-    add_emulator("MSX", "msx", "dsk rom mx1 mx2", RG_LOGO_PAD_MSX, RG_LOGO_HEADER_MSX, NO_GAME_DATA);
-    add_emulator("Atari 2600", "a2600", "a26 bin", RG_LOGO_PAD_A2600, RG_LOGO_HEADER_A2600, NO_GAME_DATA);
-    add_emulator("Atari 7800", "a7800", "a78", RG_LOGO_PAD_A7800, RG_LOGO_HEADER_A7800, NO_GAME_DATA);
-    add_emulator("Amstrad CPC", "amstrad", "dsk", RG_LOGO_PAD_AMSTRAD, RG_LOGO_HEADER_AMSTRAD, NO_GAME_DATA);
-//    add_emulator("Philips Vectrex", "videopac", "bin", RG_LOGO_PAD_VIDEOPAC, RG_LOGO_HEADER_AMSTRAD, NO_GAME_DATA); // TODO : change graphics
+    add_emulator("PC Engine", "pce", "pce lzma", RG_LOGO_PAD_PCE, RG_LOGO_HEADER_PCE, NO_GAME_DATA);
+    add_emulator("Sega Game Gear", "gg", "gg lzma", RG_LOGO_PAD_GG, RG_LOGO_HEADER_GG, NO_GAME_DATA);
+    add_emulator("Sega Master System", "sms", "sms lzma", RG_LOGO_PAD_SMS, RG_LOGO_HEADER_SMS, NO_GAME_DATA);
+    add_emulator("Sega Genesis", "md", "md gen bin lzma", RG_LOGO_PAD_GEN, RG_LOGO_HEADER_GEN, GAME_DATA_BYTESWAP_16);
+    add_emulator("Sega SG-1000", "sg", "sg lzma", RG_LOGO_PAD_SG1000, RG_LOGO_HEADER_SG1000, NO_GAME_DATA);
+    add_emulator("Colecovision", "col", "col lzma", RG_LOGO_PAD_COL, RG_LOGO_HEADER_COL, NO_GAME_DATA);
+    add_emulator("Watara Supervision", "wsv", "wsv sv bin lzma", RG_LOGO_PAD_WSV, RG_LOGO_HEADER_WSV, NO_GAME_DATA);
+    add_emulator("MSX", "msx", "dsk rom mx1 mx2 cdk lzma", RG_LOGO_PAD_MSX, RG_LOGO_HEADER_MSX, NO_GAME_DATA);
+    add_emulator("Atari 2600", "a2600", "a26 bin lzma", RG_LOGO_PAD_A2600, RG_LOGO_HEADER_A2600, NO_GAME_DATA);
+    add_emulator("Atari 7800", "a7800", "a78 bin lzma", RG_LOGO_PAD_A7800, RG_LOGO_HEADER_A7800, NO_GAME_DATA);
+    add_emulator("Amstrad CPC", "amstrad", "dsk cdk", RG_LOGO_PAD_AMSTRAD, RG_LOGO_HEADER_AMSTRAD, NO_GAME_DATA);
+//    add_emulator("Philips Vectrex", "videopac", "bin lzma", RG_LOGO_PAD_VIDEOPAC, RG_LOGO_HEADER_AMSTRAD, NO_GAME_DATA); // TODO : change graphics
     add_emulator("Tamagotchi", "tama", "b", RG_LOGO_PAD_TAMA, RG_LOGO_HEADER_TAMA, NO_GAME_DATA);
     add_emulator("Pokemon Mini", "mini", "min", RG_LOGO_PAD_PKMINI, RG_LOGO_HEADER_PKMINI, NO_GAME_DATA);
     add_emulator("Homebrew", "homebrew", "bin", RG_LOGO_EMPTY, RG_LOGO_HEADER_HOMEBREW, NO_GAME_DATA);

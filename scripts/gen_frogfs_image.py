@@ -15,7 +15,7 @@ DEFAULT_DIRS = ("bios", "covers", "fonts", "roms")
 # Under /roms, do not duplicate trees that are merged into /bios (routing uses /bios for FrogFS).
 ROMS_TOP_EXCLUDE_FOR_BIOS_MERGE = frozenset({"bios"})
 # Artifacts / compressed ROMs not packed into FrogFS /roms (covers live under /covers).
-ROMS_SKIP_EXTENSIONS = frozenset({".lzma", ".img", ".jpg", ".jpeg", ".png", ".bmp"})
+ROMS_SKIP_EXTENSIONS = frozenset({".img", ".jpg", ".jpeg", ".png", ".bmp"})
 # Thumbnails from tools/gencovers.py (--dst); merged into FrogFS /covers (not repo ./covers).
 GENERATED_COVERS_SUBDIR = "covers_from_roms"
 
@@ -520,6 +520,18 @@ def main():
         help="QSPI mmap base (__EXTFLASH_BASE__) for pico8.ro post-patch.",
     )
     parser.add_argument(
+        "--rom-compression",
+        choices=("none", "lzma"),
+        default="none",
+        help="Pre-compress ROM payloads under /roms in the FrogFS staging tree (SD_CARD=0 build; "
+        "same LZMA formats as legacy parse_roms.py). Use with firmware built without GNW_DISABLE_COMPRESSION.",
+    )
+    parser.add_argument(
+        "--compress-gb-speed",
+        action="store_true",
+        help="Game Boy: selective bank compression (legacy --compress_gb_speed).",
+    )
+    parser.add_argument(
         "--extflash-offset",
         type=parse_int,
         default=0,
@@ -662,6 +674,16 @@ def main():
         roms_exclude_top=frozenset(roms_exclude),
         roms_skip_rel_paths=roms_skip_merged,
     )
+
+    if args.rom_compression == "lzma":
+        import rom_frogfs_lzma  # noqa: E402
+
+        rom_staging = build_dir / "input" / "roms"
+        rom_frogfs_lzma.pack_staged_roms(
+            repo,
+            rom_staging,
+            compress_gb_speed=args.compress_gb_speed,
+        )
 
     config_path = build_dir / "frogfs.yaml"
     with config_path.open("w", encoding="utf-8") as config:
