@@ -2,7 +2,7 @@
 """
 Pre-compress ROM blobs for FrogFS (SD_CARD=0), matching legacy parse_roms.py --compress lzma.
 
-Produces sidecar names like game.nes.lzma, SMS+/GB bank containers, and MSX/Amstrad .dsk → .dsk.cdk
+Produces sidecar names like game.lzma, SMS+/GB bank containers, and MSX/Amstrad .dsk → .cdk
 via tools/dsk2lzma.py and tools/amdsk2lzma.py.
 """
 from __future__ import annotations
@@ -166,7 +166,7 @@ def _dedupe_uncompressed_vs_lzma(roms_root: Path) -> None:
     for p in sorted(roms_root.rglob("*")):
         if not p.is_file():
             continue
-        sibling = p.parent / (p.name + ".lzma")
+        sibling = p.parent / (p.stem + ".lzma")
         if sibling.is_file():
             if not p.name.lower().endswith(".lzma"):
                 try:
@@ -193,8 +193,17 @@ def _convert_dsk_if_needed(repo: Path, tool: str, path: Path) -> bool:
             file=sys.stderr,
         )
         return False
-    cdk = path.parent / (path.name + ".cdk")
-    return cdk.is_file()
+    # Tools may write legacy jeu.dsk.cdk; normalize to jeu.cdk for cover basename matching.
+    final_cdk = path.parent / (path.stem + ".cdk")
+    legacy_cdk = path.parent / (path.name + ".cdk")
+    if legacy_cdk.is_file() and legacy_cdk != final_cdk:
+        try:
+            if final_cdk.is_file():
+                final_cdk.unlink()
+            legacy_cdk.rename(final_cdk)
+        except OSError:
+            return False
+    return final_cdk.is_file()
 
 
 def pack_staged_roms(
@@ -214,8 +223,7 @@ def pack_staged_roms(
     compressed = 0
     skipped = 0
 
-    # MSX floppy compression → .dsk.cdk (see main_msx.c: treat ext \"cdk\" like \"dsk\")
-    # Amstrad CPC .dsk → .dsk.cdk via tools/amdsk2lzma.py (MV - CPC / EXTENDED formats)
+    # MSX / Amstrad: jeu.dsk → jeu.cdk (ext cdk; main_msx treats cdk like dsk)
     for p in list(sorted(roms_staging_root.rglob("*.dsk"))):
         if not p.is_file():
             continue
@@ -272,7 +280,7 @@ def pack_staged_roms(
             skipped += 1
             continue
 
-        out_path = p.parent / (p.name + ".lzma")
+        out_path = p.parent / (p.stem + ".lzma")
         out_path.write_bytes(out)
         try:
             p.unlink()
