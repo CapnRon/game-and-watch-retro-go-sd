@@ -249,7 +249,7 @@ bool odroid_system_emu_screenshot(const char *filename)
     rg_storage_mkdir(rg_dirname(filename));
 
     uint8_t *data;
-    size_t size = sizeof(framebuffer1);
+    size_t size = lcd_get_frame_size();
     if (currentApp.handlers.screenshot) {
         data = (*currentApp.handlers.screenshot)();
     } else {
@@ -424,6 +424,12 @@ IRAM_ATTR void odroid_system_tick(uint skippedFrame, uint fullFrame, uint busyTi
 void odroid_system_switch_app(int app)
 {
     printf("%s: Switching to app %d.\n", __FUNCTION__, app);
+
+    /* Restore default LCD pixel format on app exit. Emulators that switched
+     * the LTDC into LUT8 mode (PICO-8, NES) leave the LCD configured for
+     * indexed color — the retro-go launcher and other targets expect
+     * RGB565. Catch-all here so every emulator's exit path resets cleanly. */
+    lcd_setup_framebuffers(LCD_MODE_RGB565);
 
     odroid_system_sram_save();
 

@@ -1319,6 +1319,14 @@ void emulator_start(retro_emulator_file_t *file, bool load_state, bool start_pau
        * will be loaded to RAM_EMU, overwriting any metadata allocated there.
        * The engine's p8_firmware_bridge_sync() sets ram_start properly
        * before any pool allocations. */
+      /* PICO-8 overlay loads at the high end of RAM_EMU, NOT __RAM_EMU_START__.
+       * The linker reserves _PICO8_HIGH_RESERVE bytes for the engine binary
+       * + BSS at the top so the freed low portion of RAM_EMU is contiguous
+       * with the LCD bonus area, forming one big main TLSF pool. */
+      extern uint8_t __overlay_pico8_vma[];
+      uint8_t *pico8_load_addr = (uint8_t *)__overlay_pico8_vma;
+      uint8_t *pico8_reserve_end = (uint8_t *)__RAM_END__;
+
       ram_start = (uint32_t)&__RAM_EMU_START__;
       uint32_t pico8_code_size = 0;
       uint8_t *pico8_code_addr = Pico8CacheCodeToFlash(&pico8_code_size);
@@ -1326,46 +1334,44 @@ void emulator_start(retro_emulator_file_t *file, bool load_state, bool start_pau
       ram_start = 0;
       size_t pico8_bin_size = 0;
       if (pico8_code_addr &&
-          (pico8_bin_size = load_core_bin_with_header("/cores/pico8.bin", (uint8_t *)&__RAM_EMU_START__))) {
+          (pico8_bin_size = load_core_bin_with_header("/cores/pico8.bin", pico8_load_addr))) {
         /* Zero BSS: the separately-distributed engine binary has a much
-         * larger BSS (~40 KB) than the GPL stub. We don't know the exact
-         * BSS size, so zero from end-of-loaded-data to a generous upper
-         * bound (256 KB past loaded data, capped at RAM_EMU end). This
-         * ensures the engine's p8 struct, pool state, etc. start clean. */
-        uint8_t *bss_start = (uint8_t *)&__RAM_EMU_START__ + pico8_bin_size;
-        uint8_t *bss_end   = bss_start + 256 * 1024;
-        if (bss_end > (uint8_t *)&__RAM_EMU_START__ + (size_t)&_OVERLAY_PICO8_SIZE + 512*1024)
-            bss_end = (uint8_t *)&__RAM_EMU_START__ + (size_t)&_OVERLAY_PICO8_SIZE + 512*1024;
+         * larger BSS (~40 KB) than the GPL stub. The reserve area runs from
+         * pico8_load_addr to __RAM_END__; zeroing the entire post-load
+         * portion clears BSS + any reserve padding so the engine starts
+         * with a clean state. */
+        uint8_t *bss_start = pico8_load_addr + pico8_bin_size;
+        uint8_t *bss_end   = pico8_reserve_end;
         /* Sentinel scan covers ONLY loaded code+data (pico8.bin), NOT the
          * zeroed BSS. BSS is all zeros → no sentinel matches. Scanning
          * BSS is harmless but scanning loaded DATA risks false positives:
          * any fix32 constant in the -16657..-16565 range (0xBEEFxxxx)
          * would be incorrectly "patched" and corrupted. */
-        uint8_t *scan_end = (uint8_t *)&__RAM_EMU_START__ + pico8_bin_size;
+        uint8_t *scan_end = pico8_load_addr + pico8_bin_size;
 
         memset(bss_start, 0x0, bss_end - bss_start);
-        int patched = PatchPico8Region((uint32_t *)__RAM_EMU_START__, (uint32_t *)scan_end,
+        int patched = PatchPico8Region((uint32_t *)pico8_load_addr, (uint32_t *)scan_end,
                          (int32_t)((uint32_t)pico8_code_addr - PICO8_CODE_BASE),
                          pico8_code_size);
         printf("P8: patched %d refs in RAM %p..%p (loaded %u bytes)\n",
-               patched, __RAM_EMU_START__, scan_end, (unsigned)pico8_bin_size);
+               patched, pico8_load_addr, scan_end, (unsigned)pico8_bin_size);
         /* Expose for ITCM sentinel patching in main_pico8.c (after SD load) */
         pico8_code_flash_addr = pico8_code_addr;
         pico8_code_flash_size = pico8_code_size;
 
-        SCB_CleanDCache_by_Addr((uint32_t *)&__RAM_EMU_START__, pico8_bin_size + 128*1024);
+        SCB_CleanDCache_by_Addr((uint32_t *)pico8_load_addr, bss_end - pico8_load_addr);
         SCB_InvalidateICache();
         /* Dispatch via entry trampoline at overlay offset 0, not via
          * linker veneer — the loaded binary may have app_main_pico8 at a
          * different offset than the GPL stub's link-time layout. */
-        ((void (*)(uint8_t, uint8_t, int8_t))((uintptr_t)__RAM_EMU_START__ | 1))(load_state, start_paused, save_slot);
-      } else if ((pico8_bin_size = load_core_bin_with_header("/cores/pico8_stub.bin", (uint8_t *)&__RAM_EMU_START__))) {
+        ((void (*)(uint8_t, uint8_t, int8_t))((uintptr_t)pico8_load_addr | 1))(load_state, start_paused, save_slot);
+      } else if ((pico8_bin_size = load_core_bin_with_header("/cores/pico8_stub.bin", pico8_load_addr))) {
         /* Last resort: GPL stub (shows "engine not installed" message) */
-        uint8_t *bss_start = (uint8_t *)&__RAM_EMU_START__ + pico8_bin_size;
-        uint8_t *bss_end   = bss_start + 256 * 1024;
+        uint8_t *bss_start = pico8_load_addr + pico8_bin_size;
+        uint8_t *bss_end   = pico8_reserve_end;
         memset(bss_start, 0x0, bss_end - bss_start);
-        SCB_CleanDCache_by_Addr((uint32_t *)&__RAM_EMU_START__, pico8_bin_size + 256*1024);
-        ((void (*)(uint8_t, uint8_t, int8_t))((uintptr_t)__RAM_EMU_START__ | 1))(load_state, start_paused, save_slot);
+        SCB_CleanDCache_by_Addr((uint32_t *)pico8_load_addr, bss_end - pico8_load_addr);
+        ((void (*)(uint8_t, uint8_t, int8_t))((uintptr_t)pico8_load_addr | 1))(load_state, start_paused, save_slot);
       }
     }
 

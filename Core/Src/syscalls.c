@@ -111,11 +111,15 @@ int _write(int file, char *ptr, int len)
 {
     if (file == STDOUT_FILENO || file == STDERR_FILENO)
     {
+        if (len <= 0) return len < 0 ? 0 : 0;
+        /* A single write larger than the buffer would memcpy past logbuf into
+         * .data/.bss after the wrap branch — clamp it to fit. */
+        if ((size_t)len >= sizeof(logbuf))
+            len = (int)(sizeof(logbuf) - 1);
+
         uint32_t idx = log_idx;
-        if (idx + len + 1 > sizeof(logbuf))
-        {
+        if ((size_t)idx + (size_t)len + 1 > sizeof(logbuf))
             idx = 0;
-        }
 
         memcpy(&logbuf[idx], ptr, len);
         idx += len;
@@ -562,8 +566,14 @@ int _write(int file, char *ptr, int len)
 {
     if (file == STDOUT_FILENO || file == STDERR_FILENO)
     {
+        if (len <= 0) return len < 0 ? 0 : 0;
+        /* A single write larger than the buffer would memcpy past logbuf into
+         * .data/.bss after the wrap branch — clamp it to fit. */
+        if ((size_t)len >= sizeof(logbuf))
+            len = (int)(sizeof(logbuf) - 1);
+
         uint32_t idx = log_idx;
-        if (idx + len + 1 > sizeof(logbuf))
+        if ((size_t)idx + (size_t)len + 1 > sizeof(logbuf))
             idx = 0;
 
         memcpy(&logbuf[idx], ptr, len);
