@@ -9,7 +9,7 @@ ENV ARM_COMPILER_DIR=/opt/arm-gnu-toolchain
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN set -eux; \
-    case "$TARGETARCH" in \
+    case "${TARGETARCH:-amd64}" in \
         amd64) echo "ARCH=x86_64" > /arch ;; \
         arm64) echo "ARCH=aarch64" > /arch ;; \
         *) echo "Unsupported TARGETARCH: $TARGETARCH"; exit 1 ;; \
