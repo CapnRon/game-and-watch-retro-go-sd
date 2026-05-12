@@ -200,11 +200,20 @@ static bool GLOBAL_DATA lang_update_cb(odroid_dialog_choice_t *option, odroid_di
         lang = odroid_settings_get_next_lang(lang);
         odroid_settings_lang_set(lang);
     }
+    /* Switch curr_lang so the OTHER options' value callbacks (which
+     * dereference curr_lang->s_X each redraw, e.g. to format an ON/OFF
+     * state) live-update as the user navigates languages.
+     *
+     * Captured options[i].label pointers from the dialog's local
+     * choices array stay valid because i18n_load_language() does NOT
+     * reuse the underlying strings buffer — it parks each previous
+     * buffer in lang_stale_bufs[] and only frees them in batch from
+     * odroid_settings_commit(), which runs after this dialog has
+     * returned. */
     curr_lang = i18n_load_language(lang);
-    /* Use the baked native name from lang_metadata so the menu reads
-     * correctly even when /lang/xx_xx.bin is missing (i18n_load_language
-     * falls back to en_us in that case, and curr_lang->s_LangName would
-     * always print "English" — confusing). */
+    /* Use the baked native name from lang_metadata for the lang
+     * option's own value so it reads correctly even when this
+     * language's /lang/xx_xx.bin is missing. */
     sprintf(option->value, "%s", i18n_lang_display_name(lang));
     return event == ODROID_DIALOG_ENTER;
 }

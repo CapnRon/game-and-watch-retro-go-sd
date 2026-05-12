@@ -31,6 +31,13 @@ lang_t *i18n_load_language(int idx);
  * to list available languages without loading their strings. */
 const char *i18n_lang_display_name(int idx);
 
+/* Free every previously-current language strings buffer. Each call to
+ * i18n_load_language() parks the old buffer rather than freeing it,
+ * so captured curr_lang->s_X pointers (e.g. options[i].label inside an
+ * open menu) stay valid across language switches. Call this AFTER any
+ * dialog that captured such pointers has fully returned. */
+void i18n_release_stale_buffers(void);
+
 int i18n_get_text_height();
 
 int  i18n_get_text_width(const char *text);

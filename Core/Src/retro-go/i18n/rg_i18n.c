@@ -466,7 +466,11 @@ typedef struct {
  * `lang` in odroid settings). Changing the order or removing an
  * entry shifts every saved selection, so prefer appending. */
 static const lang_metadata_t lang_metadata[] = {
-    { 1252, "/lang/en_us.bin", "English",
+    /* en_us has bin_path = NULL because the baked lang_en_us struct in
+     * rodata is always available; i18n_load_language() short-circuits
+     * directly to it instead of doing a pointless SD read. The Makefile
+     * also skips generating /lang/en_us.bin for the same reason. */
+    { 1252, NULL, "English",
       en_us_fmt_Title_Date_Format, en_us_fmt_Date, en_us_fmt_Time },
 #if INCLUDED_ES_ES == 1
     { 1252, "/lang/es_es.bin", "Español",
@@ -519,12 +523,36 @@ static const lang_metadata_t lang_metadata[] = {
      / sizeof(const char *))
 
 static lang_t  lang_active;
-static char   *lang_active_strings_buf = NULL;
-static size_t  lang_active_strings_size = 0;
+/* Each successful load allocates a FRESH strings buffer (no realloc /
+ * reuse) so any pointer captured before the load — e.g. an open menu's
+ * options[i].label = curr_lang->s_Brightness — stays valid into the
+ * freed-but-not-overwritten region. Previously-current buffers are
+ * kept alive in lang_stale_bufs[] until the dialog that captured them
+ * closes; odroid_settings_commit() then calls
+ * i18n_release_stale_buffers() to drop them all in one batch.
+ *
+ * This lets value callbacks (which dereference curr_lang->s_X each
+ * redraw) live-update as the user navigates through languages, while
+ * label captures (frozen at dialog-open time) keep showing the
+ * original language. */
+static char   *lang_strings_buf = NULL;
+#define LANG_STALE_BUFS_MAX 16
+static char   *lang_stale_bufs[LANG_STALE_BUFS_MAX];
+static int     lang_stale_count = 0;
+/* idx most recently SUCCESSFULLY loaded into lang_active. -1 = none. */
+static int     lang_active_idx = -1;
+/* idx of the last attempt (success or failure). Lets us short-circuit
+ * BOTH paths so the menu-redraw callback (which fires at ~60 Hz) doesn't
+ * re-open the file every frame — without this cache, a missing .bin
+ * would spam fopen+fclose churn and exhaust FatFs file descriptors. */
+static int     last_attempted_idx = -1;
 
-/* Load /lang/xx_xx.bin for `idx` (offset into gui_lang[] / lang_metadata).
+/* Load /lang/xx_xx.bin for `idx` (offset into lang_metadata).
  * On success returns &lang_active (caller may set curr_lang to it).
- * On any error returns &lang_en_us (baked fallback). */
+ * On any error returns &lang_en_us (baked fallback).
+ *
+ * Cheap to call repeatedly for the same idx — only actually opens the
+ * file on first call or after the user picks a different language. */
 lang_t *i18n_load_language(int idx)
 {
     const int n = (int)(sizeof(lang_metadata) / sizeof(*lang_metadata));
@@ -532,7 +560,18 @@ lang_t *i18n_load_language(int idx)
         fprintf(stderr, "i18n_load: idx=%d out of range, falling back to en_us\n", idx);
         return &lang_en_us;
     }
+    /* Already attempted this idx — return cached result. */
+    if (idx == last_attempted_idx) {
+        return (idx == lang_active_idx && lang_strings_buf)
+                   ? &lang_active : &lang_en_us;
+    }
+    last_attempted_idx = idx;
     const lang_metadata_t *m = &lang_metadata[idx];
+
+    /* Special case: languages with bin_path == NULL (currently only
+     * en_us) live entirely in baked rodata — no SD I/O needed. */
+    if (!m->bin_path)
+        return &lang_en_us;
 
     FILE *f = fopen(m->bin_path, "rb");
     if (!f) {
@@ -589,24 +628,40 @@ lang_t *i18n_load_language(int idx)
     }
     fseek(f, header_end, SEEK_SET);
 
-    /* (Re)allocate the strings buffer. */
-    char *buf = realloc(lang_active_strings_buf, (size_t)strings_size);
+    /* Fresh allocation — do NOT realloc/reuse lang_strings_buf, since
+     * captured stale pointers may still read from it. Park the old
+     * buffer in lang_stale_bufs[] for later batch-release. */
+    char *buf = malloc((size_t)strings_size);
     if (!buf) {
         fprintf(stderr, "i18n_load: '%s' OOM allocating %ld bytes — using en_us\n",
                 m->bin_path, strings_size);
         fclose(f);
         return &lang_en_us;
     }
-    lang_active_strings_buf = buf;
-    lang_active_strings_size = (size_t)strings_size;
 
     if (fread(buf, 1, (size_t)strings_size, f) != (size_t)strings_size) {
         fprintf(stderr, "i18n_load: '%s' short read of strings — using en_us\n",
                 m->bin_path);
+        free(buf);
         fclose(f);
         return &lang_en_us;
     }
     fclose(f);
+
+    /* Park the previous buffer. If the stale list is full, evict the
+     * oldest entry — pointers into THAT region break, but the user
+     * would have had to visit 16+ different languages without exiting
+     * the menu for this to matter. */
+    if (lang_strings_buf) {
+        if (lang_stale_count >= LANG_STALE_BUFS_MAX) {
+            free(lang_stale_bufs[0]);
+            for (int i = 1; i < LANG_STALE_BUFS_MAX; i++)
+                lang_stale_bufs[i - 1] = lang_stale_bufs[i];
+            lang_stale_count = LANG_STALE_BUFS_MAX - 1;
+        }
+        lang_stale_bufs[lang_stale_count++] = lang_strings_buf;
+    }
+    lang_strings_buf = buf;
 
     /* Populate lang_active. Start from baked en_us so any field missing
      * from the .bin still has a sane (English) pointer.
@@ -624,13 +679,28 @@ lang_t *i18n_load_language(int idx)
     const char **strings = (const char **)&lang_active.s_LangUI;
     for (uint16_t i = 0; i < to_read; i++) {
         if (offsets[i] < (uint32_t)strings_size)
-            strings[i] = buf + offsets[i];
+            strings[i] = lang_strings_buf + offsets[i];
         /* else: keep the en_us fallback we memcpy'd above */
     }
 
+    lang_active_idx = idx;
     printf("i18n_load: '%s' loaded %u strings (%ld bytes)\n",
            m->bin_path, to_read, strings_size);
     return &lang_active;
+}
+
+/* Free every parked previous-language buffer. Call AFTER any dialog
+ * whose local options[].label could be holding pointers into those
+ * buffers has fully returned. odroid_settings_commit() is the
+ * canonical hook — by the time it runs, the settings dialog has
+ * exited and its stack-local options[] array is gone. */
+void i18n_release_stale_buffers(void)
+{
+    for (int i = 0; i < lang_stale_count; i++) {
+        free(lang_stale_bufs[i]);
+        lang_stale_bufs[i] = NULL;
+    }
+    lang_stale_count = 0;
 }
 
 /* Public count of languages available at this build (replaces what
