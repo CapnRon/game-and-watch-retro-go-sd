@@ -13,10 +13,10 @@ import zipfile
 # Release bundle: cores/ contains pico8.bin, pico8.ro, etc.
 PICO8_GNW_CORES_ZIP_URL = (
     "https://github.com/Macs75/pico8_gnw_distro/releases/download/"
-    "v.0.1.4b/pico8_cores-2026-05-07.zip"
+    "v.0.1.5b/pico8_cores-2026-05-11.zip"
 )
 
-PICO8_CACHE_FILENAME = "pico8_gnw_cores-2026-05-07.zip"
+PICO8_CACHE_FILENAME = "pico8_gnw_cores-2026-05-11.zip"
 
 # Same as sd_cores_pack: never place the placeholder stub on LittleFS.
 _SKIP_BASENAMES = frozenset({"pico8_stub.bin"})
