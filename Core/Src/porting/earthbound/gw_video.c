@@ -54,17 +54,7 @@ void platform_video_set_vsync(bool enabled)
     (void)enabled;
 }
 
-extern void ppu_render_frame(void);
-
-void platform_render_frame(scanline_stamp_cb_t fps_overlay_cb)
-{
-    platform_video_begin_frame();
-    ppu_render_frame();
-    if (fps_overlay_cb) {
-        uint16_t *fb = lcd_get_active_buffer();
-        for (int y = 0; y < EB_VIEWPORT_HEIGHT; y++) {
-            fps_overlay_cb(y, &fb[(y + Y_OFFSET) * GW_LCD_WIDTH + X_OFFSET]);
-        }
-    }
-    platform_video_end_frame();
-}
+/* platform_render_frame() is provided by src/platform/platform_render.c
+ * (the upstream single-core default). It calls begin_frame, ppu_render_frame
+ * with platform_video_send_scanline as the scanline callback, and end_frame.
+ * The G&W is single-core so we use that default verbatim. */
