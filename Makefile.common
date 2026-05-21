@@ -995,6 +995,50 @@ external/smw/smw_assets.dat: roms/smw/smw.sfc | $(BUILD_DIR)
 	cp $< external/smw/assets/smw.sfc
 	$(MAKE) -C external/smw smw_assets.dat
 
+# EarthBound donor ROM. Override on the command line:
+#   make GNW_TARGET=mario EARTHBOUND_SFC=/path/to/earthbound.sfc
+EARTHBOUND_SFC ?= roms/earthbound/earthbound.sfc
+
+# Three-stage upstream asset pipeline:
+#   1. ebtools extract        — donor ROM → asm/bin/{US,JP}/* + assets.manifest
+#   2. ebtools pack-all       — src/assets/ JSON → packed_assets/ binary
+#   3. ebtools embed-registry — packed + raw → embedded_assets_*.{c,h}
+#
+# Stage 1 is handled by upstream's `make unix-extract` (which also sets up
+# the .venv and installs ebtools). Stages 2 and 3 we drive directly into
+# our build tree. All three depend on the donor ROM at $(EARTHBOUND_SFC);
+# if it's not there the rule errors out with a clear "No rule to make"
+# message pointing at the user-overridable path.
+EARTHBOUND_ASSETS_MANIFEST = external/earthbound/asm/bin/assets.manifest
+EARTHBOUND_PACKED_DIR = $(EARTHBOUND_GEN_DIR)/packed_assets
+
+EARTHBOUND_GEN_HEADERS = \
+	$(EARTHBOUND_GEN_DIR)/embedded_assets.h \
+	$(EARTHBOUND_GEN_DIR)/asset_ids.h \
+	$(EARTHBOUND_GEN_DIR)/embedded_assets_array.c \
+	$(EARTHBOUND_GEN_DIR)/embedded_assets.inc.c \
+	$(EARTHBOUND_GEN_DIR)/embedded_assets_decl.h
+
+# Symlink the user's donor ROM into the submodule's expected location.
+# Upstream's unix-extract / unix-check-rom both look for ./earthbound.sfc.
+external/earthbound/earthbound.sfc: $(EARTHBOUND_SFC)
+	@ln -sf $(abspath $<) $@
+
+$(EARTHBOUND_ASSETS_MANIFEST): external/earthbound/earthbound.sfc
+	@echo "[ ebtools extract ] from $(EARTHBOUND_SFC)"
+	@$(MAKE) -C external/earthbound unix-venv unix-extract
+
+$(EARTHBOUND_GEN_HEADERS) &: $(EARTHBOUND_ASSETS_MANIFEST) | $(BUILD_DIR)
+	@echo "[ ebtools pack-all       ]"
+	@cd external/earthbound && . .venv/bin/activate && ebtools pack-all \
+		src/assets $(abspath $(EARTHBOUND_PACKED_DIR)) \
+		-b asm/bin -y earthbound.yml -c commondefs.yml
+	@echo "[ ebtools embed-registry ]"
+	@cd external/earthbound && . .venv/bin/activate && ebtools embed-registry \
+		asm/bin/assets.manifest asm/bin $(abspath $(EARTHBOUND_GEN_DIR)) src/vendor/incbin \
+		--custom-dir $(abspath $(EARTHBOUND_PACKED_DIR)) \
+		--locale US
+
 $(BUILD_DIR):
 	$(V)mkdir $@
 	$(V)mkdir $@/core
