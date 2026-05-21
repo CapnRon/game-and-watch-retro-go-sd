@@ -973,8 +973,10 @@ $$(BUILD_DIR)/earthbound/$(patsubst %.c,%.o,$(notdir $1)): $1 Makefile.common Ma
 endef
 # note: the blank line above is intentional
 
-# generate all earthbound object prerequisite rules
-$(eval $(foreach obj,$(EARTHBOUND_C_SOURCES),$(call earthbound_obj_prereq_gen,$(obj))))
+# generate all earthbound object prerequisite rules — embedded_assets_array.c
+# is filtered out because it has its own explicit rule below with the
+# INCBIN_OUTPUT_SECTION + EBASSET_TABLE_ATTR overrides.
+$(eval $(foreach obj,$(filter-out %/embedded_assets_array.c,$(EARTHBOUND_C_SOURCES)),$(call earthbound_obj_prereq_gen,$(obj))))
 
 # embedded_assets_array.c is special: INCBIN_OUTPUT_SECTION routes the 3 MB
 # of asset bytes into .rodata_assets (caught by .rodata_earthbound in the
