@@ -869,6 +869,27 @@ $(CORE_SMW)/src/snes/cart.c \
 $(CORE_SMW)/src/tracing.c \
 Core/Src/porting/smw/main_smw.c
 
+CORE_EARTHBOUND = external/earthbound
+EARTHBOUND_GEN_DIR = $(BUILD_DIR)/earthbound_gen
+EARTHBOUND_C_SOURCES = \
+$(wildcard $(CORE_EARTHBOUND)/src/core/*.c) \
+$(wildcard $(CORE_EARTHBOUND)/src/entity/*.c) \
+$(wildcard $(CORE_EARTHBOUND)/src/game/*.c) \
+$(wildcard $(CORE_EARTHBOUND)/src/intro/*.c) \
+$(wildcard $(CORE_EARTHBOUND)/src/platform/*.c) \
+$(wildcard $(CORE_EARTHBOUND)/src/snes/*.c) \
+$(wildcard $(CORE_EARTHBOUND)/src/data/*.c) \
+$(CORE_EARTHBOUND)/src/game_main.c \
+$(CORE_EARTHBOUND)/port/gw_retro_go/main.c \
+$(EARTHBOUND_GEN_DIR)/embedded_assets_array.c \
+Core/Src/porting/earthbound/main_earthbound.c \
+Core/Src/porting/earthbound/gw_video.c \
+Core/Src/porting/earthbound/gw_input.c \
+Core/Src/porting/earthbound/gw_audio.c \
+Core/Src/porting/earthbound/gw_timer.c \
+Core/Src/porting/earthbound/gw_debug.c \
+Core/Src/porting/earthbound/gw_save.c
+
 GNUBOY_C_INCLUDES +=  \
 -ICore/Inc \
 -ICore/Src/porting/lib \
@@ -1049,6 +1070,17 @@ SMW_C_INCLUDES +=  \
 -Iretro-go-stm32/components/odroid \
 -I$(CORE_SMW)/ \
 -Iexternal \
+-I./
+
+EARTHBOUND_C_INCLUDES +=  \
+-ICore/Inc \
+-ICore/Inc/porting/earthbound \
+-ICore/Src/porting/lib \
+-Iretro-go-stm32/components/odroid \
+-I$(CORE_EARTHBOUND)/src \
+-I$(CORE_EARTHBOUND)/src/include \
+-I$(CORE_EARTHBOUND)/src/vendor/incbin \
+-I$(EARTHBOUND_GEN_DIR) \
 -I./
 
 CELESTE_C_INCLUDES +=  \
