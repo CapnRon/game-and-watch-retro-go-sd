@@ -12,12 +12,12 @@
 
 extern void wdog_refresh(void);
 
-static uint64_t frame_counter;
+static uint64_t eb_frame_counter;
 static uint32_t fps_tenths = 600;
 
 bool platform_timer_init(void)
 {
-    frame_counter = 0;
+    eb_frame_counter = 0;
     return true;
 }
 
@@ -30,7 +30,7 @@ void platform_timer_frame_end(void)
     wdog_refresh();
     lcd_wait_for_vblank();
     lcd_swap();
-    frame_counter++;
+    eb_frame_counter++;
 }
 
 void platform_timer_update_fps(void) {}

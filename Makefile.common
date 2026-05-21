@@ -968,9 +968,17 @@ C_DEFS_EARTHBOUND =  \
 -DEB_NORELOC_REQUIRED=1 \
 -DUSA=1 \
 
+# Items/music headers come from `ebtools generate items-header` and
+# `ebtools generate music-header`. Listed here so the per-object rule
+# below can include them as prerequisites — actual generation rules
+# live in the ebtools block further down.
+EARTHBOUND_HEADERS_EXTRA = \
+	$(EARTHBOUND_GEN_DIR)/items_generated.h \
+	$(EARTHBOUND_GEN_DIR)/music_generated.h
+
 # function used to generate prerequisite rules for earthbound objects
 define earthbound_obj_prereq_gen
-$$(BUILD_DIR)/earthbound/$(patsubst %.c,%.o,$(notdir $1)): $1 Makefile.common Makefile $$(SDK_HEADERS) | $$(BUILD_DIR)
+$$(BUILD_DIR)/earthbound/$(patsubst %.c,%.o,$(notdir $1)): $1 Makefile.common Makefile $$(SDK_HEADERS) $$(EARTHBOUND_GEN_HEADERS) $$(EARTHBOUND_HEADERS_EXTRA) | $$(BUILD_DIR)
 	$$(V)$$(ECHO) [ CC earthbound ] $$(notdir $$<)
 	$$(V)$$(CC) -c $$(CFLAGS) $$(C_DEFS_EARTHBOUND) $$(EARTHBOUND_C_INCLUDES) -Wa,-a,-ad,-alms=$$(BUILD_DIR)/earthbound/$$(notdir $$(<:.c=.lst)) $$< -o $$@ \
 	-Wno-parentheses -Wno-unknown-pragmas -Wno-incompatible-pointer-types -Wno-unused-const-variable -Wno-strict-aliasing -Wno-comment -Wno-unused-function -Wno-stack-usage -Wno-int-in-bool-context -Wno-unused-variable -Wno-unused-but-set-variable -Wno-implicit-function-declaration
@@ -993,7 +1001,7 @@ $(BUILD_DIR)/earthbound/embedded_assets_array.o: EXTRA_CFLAGS_EARTHBOUND := \
 	-DINCBIN_OUTPUT_SECTION='".rodata_assets"' \
 	-DEBASSET_TABLE_ATTR='__attribute__((section(".noreloc")))'
 
-$(BUILD_DIR)/earthbound/embedded_assets_array.o: $(EARTHBOUND_GEN_DIR)/embedded_assets_array.c Makefile.common Makefile $(SDK_HEADERS) | $(BUILD_DIR)
+$(BUILD_DIR)/earthbound/embedded_assets_array.o: $(EARTHBOUND_GEN_DIR)/embedded_assets_array.c Makefile.common Makefile $(SDK_HEADERS) $(EARTHBOUND_GEN_HEADERS) $(EARTHBOUND_HEADERS_EXTRA) | $(BUILD_DIR)
 	$(V)$(ECHO) [ CC earthbound ] embedded_assets_array.c
 	$(V)$(CC) -c $(CFLAGS) $(C_DEFS_EARTHBOUND) $(EXTRA_CFLAGS_EARTHBOUND) $(EARTHBOUND_C_INCLUDES) -Wa,-a,-ad,-alms=$(BUILD_DIR)/earthbound/embedded_assets_array.lst $< -o $@ \
 	-Wno-parentheses -Wno-unknown-pragmas -Wno-unused-const-variable -Wno-strict-aliasing -Wno-comment -Wno-unused-function -Wno-unused-variable
@@ -1029,6 +1037,21 @@ EARTHBOUND_GEN_HEADERS = \
 	$(EARTHBOUND_GEN_DIR)/embedded_assets.inc.c \
 	$(EARTHBOUND_GEN_DIR)/embedded_assets_decl.h
 
+# items_generated.h and music_generated.h come from `ebtools generate
+# items-header` / `music-header` (separate from embed-registry). Both
+# depend on JSON files that `ebtools extract` writes under src/assets/.
+# Declared in EARTHBOUND_HEADERS_EXTRA above (which is referenced from
+# earthbound_obj_prereq_gen so the variable must exist before that eval).
+$(EARTHBOUND_GEN_DIR)/items_generated.h: $(EARTHBOUND_ASSETS_MANIFEST) | $(BUILD_DIR)
+	@echo "[ ebtools generate items-header  ]"
+	@cd external/earthbound && . .venv/bin/activate && ebtools generate items-header \
+		port/assets/items/items.json $(abspath $@)
+
+$(EARTHBOUND_GEN_DIR)/music_generated.h: $(EARTHBOUND_ASSETS_MANIFEST) | $(BUILD_DIR)
+	@echo "[ ebtools generate music-header  ]"
+	@cd external/earthbound && . .venv/bin/activate && ebtools generate music-header \
+		port/assets/music_tracks.json $(abspath $@)
+
 # Symlink the user's donor ROM into the submodule's expected location.
 # Upstream's unix-extract / unix-check-rom both look for ./earthbound.sfc.
 external/earthbound/earthbound.sfc: $(EARTHBOUND_SFC)
@@ -1047,7 +1070,31 @@ $(EARTHBOUND_GEN_HEADERS) &: $(EARTHBOUND_ASSETS_MANIFEST) | $(BUILD_DIR)
 	@cd external/earthbound && . .venv/bin/activate && ebtools embed-registry \
 		asm/bin/assets.manifest asm/bin $(abspath $(EARTHBOUND_GEN_DIR)) src/vendor/incbin \
 		--custom-dir $(abspath $(EARTHBOUND_PACKED_DIR)) \
-		--locale US
+		--locale US \
+		--exclude "audiopacks/*" \
+		--exclude "overworld_sprites/gfx/*" \
+		--exclude "US/overworld_sprites/gfx/*" \
+		--exclude "psianims/arrangements/*.arr.lzhal" \
+		--exclude "data/EEVENT*.bin" \
+		--exclude "data/EBATTLE*.bin" \
+		--exclude "data/EGOODS*.bin" \
+		--exclude "data/ESYSTEM.bin" \
+		--exclude "data/EGLOBAL.bin" \
+		--exclude "data/EHINT.bin" \
+		--exclude "data/ENEWS.bin" \
+		--exclude "data/ESHOP*.bin" \
+		--exclude "data/EEXPL*.bin" \
+		--exclude "data/EBGMESS.bin" \
+		--exclude "data/EDEBUG.bin" \
+		--exclude "data/KEYBOARD.bin" \
+		--exclude "data/DEBUG_TEXT.bin" \
+		--exclude "data/DOOR_SCRIPTS.bin" \
+		--exclude "data/UNKNOWN_EFA2FA.bin" \
+		--exclude "data/E0[1-9]*.bin" \
+		--exclude "data/E1[0-9]*.bin" \
+		--exclude "dialogue/addr_remap.bin" \
+		--exclude "data/compressed_text_data.bin" \
+		--exclude "data/compressed_text_ptrs.bin"
 
 $(BUILD_DIR):
 	$(V)mkdir $@
