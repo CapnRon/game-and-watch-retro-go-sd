@@ -36,6 +36,7 @@ __license__ = "GPLv3"
 #include "rom_manager.h"
 #include "appid.h"
 #include "rg_i18n.h"
+#include "odroid_settings.h"
 
 /* Gwenesis Emulator */
 #include "m68k.h"
@@ -74,14 +75,16 @@ static int hori_screen_offset, vert_screen_offset;
 /* system clock is video clock */
 int system_clock;
 
+extern int mode_pal;
+
 /* shared variables with gwenesis_sn76589 */
-int16_t gwenesis_sn76489_buffer[GWENESIS_AUDIO_BUFFER_LENGTH_PAL];
+int16_t gwenesis_sn76489_buffer[GWENESIS_AUDIO_BUFFER_CAPACITY];
 int sn76489_index; /* sn78649 audio buffer index */
 int sn76489_clock; /* sn78649 clock in video clock resolution */
 
 
 /* shared variables with gwenesis_ym2612 */
-int16_t gwenesis_ym2612_buffer[GWENESIS_AUDIO_BUFFER_LENGTH_PAL];
+int16_t gwenesis_ym2612_buffer[GWENESIS_AUDIO_BUFFER_CAPACITY];
 int ym2612_index; /* ym2612 audio buffer index */
 int ym2612_clock; /* ym2612 clock in video clock resolution */
 
@@ -134,28 +137,20 @@ void gwenesis_io_get_buttons()
 
 static void gwenesis_system_init() {
 
-  /* init emulator sound system with shared audio buffer */
- // extern int mode_pal;
-
   gwenesis_audio_pll_sync = 0;
 
-
-//  memset(audiobuffer_emulator, 0, sizeof(audiobuffer_emulator));
-
- // if (mode_pal) {
-
-  //  gwenesis_audio_freq = GWENESIS_AUDIO_FREQ_PAL;
-  //  gwenesis_audio_buffer_lenght = GWENESIS_AUDIO_BUFFER_LENGTH_PAL;
-  //  gwenesis_refresh_rate = GWENESIS_REFRESH_RATE_PAL;
-
- // } else {
-
+  if (mode_pal) {
+    gwenesis_audio_freq = GWENESIS_AUDIO_FREQ_PAL;
+    gwenesis_audio_buffer_lenght = GWENESIS_AUDIO_BUFFER_LENGTH_PAL;
+    gwenesis_refresh_rate = GWENESIS_REFRESH_RATE_PAL;
+  } else {
     gwenesis_audio_freq = GWENESIS_AUDIO_FREQ_NTSC;
     gwenesis_audio_buffer_lenght = GWENESIS_AUDIO_BUFFER_LENGTH_NTSC;
     gwenesis_refresh_rate = GWENESIS_REFRESH_RATE_NTSC;
- // }
-    memset(gwenesis_sn76489_buffer,0,sizeof(gwenesis_sn76489_buffer));
-    memset(gwenesis_ym2612_buffer,0,sizeof(gwenesis_ym2612_buffer));
+  }
+
+  memset(gwenesis_sn76489_buffer, 0, sizeof(gwenesis_sn76489_buffer));
+  memset(gwenesis_ym2612_buffer, 0, sizeof(gwenesis_ym2612_buffer));
 
   odroid_audio_init(gwenesis_audio_freq);
   lcd_set_refresh_rate(gwenesis_refresh_rate);
@@ -437,6 +432,49 @@ static char gwenesis_sync_mode_str[8];
 #endif
 
 static char AudioFilter_str[2];
+static char gwenesis_region_str[8];
+/* Pending region selection in the menu (0=USA, 1=Europe, 2=Japan).
+ * Initialised from gwenesis_detected_region at game start. */
+static int gwenesis_pending_region;
+
+static void gwenesis_region_code_to_str(int code, char *buf)
+{
+    switch (code) {
+    case 1:  strcpy(buf, "Europe"); break;
+    case 2:  strcpy(buf, "Japan");  break;
+    default: strcpy(buf, "USA");    break;
+    }
+}
+
+static bool gwenesis_submenu_reset(odroid_dialog_choice_t *option, odroid_dialog_event_t event, uint32_t repeat)
+{
+    if (event == ODROID_DIALOG_ENTER) {
+        reset_emulation();
+    }
+    return event == ODROID_DIALOG_ENTER;
+}
+
+static bool gwenesis_submenu_region(odroid_dialog_choice_t *option, odroid_dialog_event_t event, uint32_t repeat)
+{
+    if (event == ODROID_DIALOG_PREV)
+        gwenesis_pending_region = gwenesis_pending_region > 0 ? gwenesis_pending_region - 1 : 2;
+    if (event == ODROID_DIALOG_NEXT)
+        gwenesis_pending_region = gwenesis_pending_region < 2 ? gwenesis_pending_region + 1 : 0;
+
+    gwenesis_region_code_to_str(gwenesis_pending_region, option->value);
+
+    if (event == ODROID_DIALOG_ENTER) {
+        gwenesis_apply_region_override(gwenesis_pending_region);
+        gwenesis_system_init();
+        power_on();
+        reset_emulation();
+        gwenesis_sound_start();
+        common_emu_state.frame_time_10us =
+            (uint16_t)(100000 / (mode_pal ? 50.0f : 60.0f) + 0.5f);
+    }
+
+    return event == ODROID_DIALOG_ENTER;
+}
 
 void gwenesis_save_local_data(FILE *file) {
   fwrite((unsigned char *)&ABCkeys_value, 4, 1, file);
@@ -444,6 +482,8 @@ void gwenesis_save_local_data(FILE *file) {
   fwrite((unsigned char *)&PAD_B_def, 4, 1, file);
   fwrite((unsigned char *)&PAD_C_def, 4, 1, file);
   fwrite((unsigned char *)&gwenesis_lpfilter, 4, 1, file);
+  /* v2: active region code (0=USA, 1=Europe, 2=Japan) */
+  fwrite((unsigned char *)&gwenesis_pending_region, 4, 1, file);
 }
 
 void gwenesis_load_local_data(FILE *file, int ss_version) {
@@ -472,6 +512,22 @@ void gwenesis_load_local_data(FILE *file, int ss_version) {
       default:
         strcpy(AudioFilter_str, curr_lang->s_md_Option_OFF);
         break;
+    }
+    if (ss_version >= 2) {
+      int saved_region;
+      fread((unsigned char *)&saved_region, 4, 1, file);
+      if (saved_region >= 0 && saved_region <= 2 &&
+          saved_region != gwenesis_pending_region) {
+        gwenesis_pending_region = saved_region;
+        gwenesis_apply_region_override(saved_region);
+        gwenesis_system_init();
+        gwenesis_sound_start();
+        common_emu_state.frame_time_10us =
+            (uint16_t)(100000 / (mode_pal ? 50.0f : 60.0f) + 0.5f);
+      } else {
+        gwenesis_pending_region = saved_region;
+      }
+      gwenesis_region_code_to_str(gwenesis_pending_region, gwenesis_region_str);
     }
   }
 }
@@ -551,8 +607,6 @@ int app_main_gwenesis(uint8_t load_state, uint8_t start_paused, int8_t save_slot
                            &gwenesis_system_SramSave);
    // rg_app_desc_t *app = odroid_system_get_app();
 
-    common_emu_state.frame_time_10us = (uint16_t)(100000 / 60.0 + 0.5f);
-
     if (start_paused) {
       common_emu_state.pause_after_frames = 2;
       odroid_audio_mute(true);
@@ -578,6 +632,13 @@ int app_main_gwenesis(uint8_t load_state, uint8_t start_paused, int8_t save_slot
 
     /*** load ROM  */
     load_cartridge();
+
+    /* Region is determined by the ROM header; initialise menu cursor and label. */
+    gwenesis_pending_region = gwenesis_detected_region;
+    gwenesis_region_code_to_str(gwenesis_pending_region, gwenesis_region_str);
+
+    common_emu_state.frame_time_10us =
+        (uint16_t)(100000 / (mode_pal ? 50.0f : 60.0f) + 0.5f);
 
     gwenesis_system_init();
 
@@ -638,8 +699,10 @@ int app_main_gwenesis(uint8_t load_state, uint8_t start_paused, int8_t save_slot
       }
 
     odroid_dialog_choice_t options[] = {
+        {300, curr_lang->s_Reset, NULL, 1, &gwenesis_submenu_reset},
         {301, curr_lang->s_md_keydefine, ABCkeys_str, 1, &gwenesis_submenu_setABC},
         {302, curr_lang->s_md_AudioFilter, AudioFilter_str, 1, &gwenesis_submenu_setAudioFilter},
+        {305, curr_lang->s_md_Region, gwenesis_region_str, 1, &gwenesis_submenu_region},
 #if ENABLE_DEBUG_OPTIONS != 0
         {303, curr_lang->s_md_VideoUpscaler, VideoUpscaler_str, 1, &gwenesis_submenu_setVideoUpscaler},
         {304, curr_lang->s_md_Synchro, gwenesis_sync_mode_str, 1, &gwenesis_submenu_sync_mode},
@@ -652,10 +715,10 @@ int app_main_gwenesis(uint8_t load_state, uint8_t start_paused, int8_t save_slot
 
     hint_counter = gwenesis_vdp_regs[10];
 
-      screen_height = REG1_PAL ? 240 : 224;
+      screen_height = REG1_PAL ? 240 : 224;  /* game-selectable: 224 or 240 active lines */
       screen_width = REG12_MODE_H40 ? 320 : 256;
-      lines_per_frame = REG1_PAL ? LINES_PER_FRAME_PAL : LINES_PER_FRAME_NTSC;
-      vert_screen_offset = REG1_PAL ? 0 : 320 * (240 - 224) / 2;
+      lines_per_frame = mode_pal ? LINES_PER_FRAME_PAL : LINES_PER_FRAME_NTSC; /* hardware: 313 or 262 */
+      vert_screen_offset = 320 * (240 - screen_height) / 2; /* centre 224 or 240 in 320×240 LCD */
 
       hori_screen_offset = 0; //REG12_MODE_H40 ? 0 : (320 - 256) / 2;
 

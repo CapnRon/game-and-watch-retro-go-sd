@@ -89,6 +89,7 @@ const lang_t lang_pt_pt LANG_DATA = {
     .s_md_Option_OFF = "\x5",
     .s_md_AudioFilter = "Filtro de Audio",
     .s_md_VideoUpscaler = "Resolução de Video",
+    .s_md_Region = "Região",
     //=====================================================================
     
     // Core\Src\porting\md\main_wsv.c ================================

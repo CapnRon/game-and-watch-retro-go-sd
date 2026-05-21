@@ -57,11 +57,11 @@ extern const char gwenesis_embedded_rom_source[];
 
 static odroid_gamepad_state_t joystick;
 
-int16_t gwenesis_ym2612_buffer[GWENESIS_AUDIO_BUFFER_LENGTH_PAL];
+int16_t gwenesis_ym2612_buffer[GWENESIS_AUDIO_BUFFER_CAPACITY];
 int ym2612_index;
 int ym2612_clock;
 
-int16_t gwenesis_sn76489_buffer[GWENESIS_AUDIO_BUFFER_LENGTH_PAL];
+int16_t gwenesis_sn76489_buffer[GWENESIS_AUDIO_BUFFER_CAPACITY];
 int sn76489_index;
 int sn76489_clock;
 
@@ -81,6 +81,7 @@ extern unsigned char gwenesis_vdp_regs[0x20];
 extern unsigned short gwenesis_vdp_status;
 extern int hint_pending;
 extern unsigned int screen_width, screen_height;
+extern int mode_pal;
 
 static void gwenesis_system_init(void);
 static void gwenesis_sound_start(void);
@@ -106,6 +107,7 @@ static int load_embedded_rom(void)
 {
     gwenesis_linux_rom = (unsigned char *)gwenesis_embedded_rom;
     gwenesis_linux_rom_size = (size_t)gwenesis_embedded_rom_size;
+    gwenesis_linux_rom_storage_size = gwenesis_linux_rom_size;
     ROM_DATA = (const unsigned char *)gwenesis_embedded_rom;
     ROM_DATA_LENGTH = (unsigned int)gwenesis_embedded_rom_size;
     snprintf(gwenesis_linux_rom_path, sizeof(gwenesis_linux_rom_path), "./%s",
@@ -140,10 +142,17 @@ void gwenesis_io_get_buttons(void)
 
 static void gwenesis_system_init(void)
 {
-    /* Simple NTSC defaults for the desktop harness. */
-    gwenesis_audio_freq = GWENESIS_AUDIO_FREQ_NTSC;
-    gwenesis_audio_buffer_lenght = GWENESIS_AUDIO_BUFFER_LENGTH_NTSC;
-    gwenesis_refresh_rate = GWENESIS_REFRESH_RATE_NTSC;
+    /* Select NTSC or PAL timing based on ROM region (set by load_cartridge). */
+    extern int mode_pal;
+    if (mode_pal) {
+        gwenesis_audio_freq = GWENESIS_AUDIO_FREQ_PAL;
+        gwenesis_audio_buffer_lenght = GWENESIS_AUDIO_BUFFER_LENGTH_PAL;
+        gwenesis_refresh_rate = GWENESIS_REFRESH_RATE_PAL;
+    } else {
+        gwenesis_audio_freq = GWENESIS_AUDIO_FREQ_NTSC;
+        gwenesis_audio_buffer_lenght = GWENESIS_AUDIO_BUFFER_LENGTH_NTSC;
+        gwenesis_refresh_rate = GWENESIS_REFRESH_RATE_NTSC;
+    }
 
     memset(gwenesis_sn76489_buffer, 0, sizeof(gwenesis_sn76489_buffer));
     memset(gwenesis_ym2612_buffer, 0, sizeof(gwenesis_ym2612_buffer));
@@ -226,10 +235,10 @@ static void run_gwenesis_emulation(void)
 
         hint_pending = 0;
 
-        screen_height = REG1_PAL ? 240 : 224;
+        screen_height = REG1_PAL ? 240 : 224;  /* game-selectable: 224 or 240 active lines */
         screen_width = REG12_MODE_H40 ? 320 : 256;
-        lines_per_frame = REG1_PAL ? LINES_PER_FRAME_PAL : LINES_PER_FRAME_NTSC;
-        vert_screen_offset = REG1_PAL ? 0 : 320 * (240 - 224) / 2;
+        lines_per_frame = mode_pal ? LINES_PER_FRAME_PAL : LINES_PER_FRAME_NTSC; /* hardware: 313 or 262 */
+        vert_screen_offset = mode_pal ? 0 : 320 * (240 - 224) / 2;
         hori_screen_offset = 0;
 
         screen = (unsigned short *)lcd_get_active_buffer();

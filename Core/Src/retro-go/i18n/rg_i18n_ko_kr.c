@@ -89,6 +89,7 @@ const lang_t lang_ko_kr LANG_DATA = {
     .s_md_Option_OFF = "\x5",
     .s_md_AudioFilter = "오디오 필터",
     .s_md_VideoUpscaler = "비디오 업스케일러",
+    .s_md_Region = "지역",
     //=====================================================================
     
     // Core\Src\porting\md\main_wsv.c ================================
