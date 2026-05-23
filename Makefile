@@ -875,7 +875,7 @@ MD_C_INCLUDES +=  \
 -I$(CORE_GWENESIS)/src/savestate \
 -I./
 
-MD_C_DEFS = -DLSB_FIRST
+MD_C_DEFS = -DLSB_FIRST -DTABLES_FULL
 
 C_INCLUDES +=  \
 -ICore/Inc \

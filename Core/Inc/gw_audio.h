@@ -8,7 +8,10 @@ extern DMA_HandleTypeDef hdma_sai1_a;
 
 // Default to 50Hz as it results in more samples than at 60Hz
 #define AUDIO_SAMPLE_RATE   (48000)
-#define AUDIO_BUFFER_LENGTH (AUDIO_SAMPLE_RATE / 50)
+// Must be large enough for any emulator's half-buffer.  Gwenesis PAL needs
+// ceil(52781 / 50) = 1056 samples per half, which exceeds the 48000/50 = 960
+// default — use 1060 to cover it with a small margin.
+#define AUDIO_BUFFER_LENGTH (1060)
 extern uint32_t audio_mute;
 
 typedef enum {
