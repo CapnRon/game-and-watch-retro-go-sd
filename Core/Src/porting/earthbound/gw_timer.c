@@ -17,10 +17,17 @@
 extern void wdog_refresh(void);
 extern void eb_audio_pump(void);
 
-static uint32_t fps_tenths = 600;
+/* IIR-filtered frame period in ms, scaled by (1 << FPS_IIR_SHIFT). 60 FPS →
+ * 16.67 ms → steady-state period_acc ≈ 267. Shift=4 (factor 1/16) matches
+ * the smoothing upstream uses for its logic/render accumulators. */
+#define FPS_IIR_SHIFT 4
+static uint32_t period_acc;
+static uint32_t last_fps_tick;
 
 bool platform_timer_init(void)
 {
+    period_acc = 0;
+    last_fps_tick = 0;
     return true;
 }
 
@@ -48,7 +55,15 @@ void platform_timer_frame_end(void)
     wdog_refresh();
 }
 
-void platform_timer_update_fps(void) {}
+void platform_timer_update_fps(void)
+{
+    uint32_t now = HAL_GetTick();
+    if (last_fps_tick != 0) {
+        uint32_t period = now - last_fps_tick;
+        period_acc = period_acc - (period_acc >> FPS_IIR_SHIFT) + period;
+    }
+    last_fps_tick = now;
+}
 
 void platform_timer_sleep_until(uint64_t deadline)
 {
@@ -69,5 +84,9 @@ uint64_t platform_timer_ticks_per_sec(void)
 
 uint32_t platform_timer_get_fps_tenths(void)
 {
-    return fps_tenths;
+    /* fps = 1000ms / period_ms; tenths = fps × 10 = 10000 / period_ms.
+     * period_acc is scaled by (1<<FPS_IIR_SHIFT), so we keep that scaling
+     * on the numerator to preserve precision. */
+    if (period_acc == 0) return 600;
+    return (10000u << FPS_IIR_SHIFT) / period_acc;
 }

@@ -1,25 +1,39 @@
 /*
  * G&W input platform — translates retro-go's odroid_gamepad_state_t into
- * SNES PAD_* bits.
+ * SNES PAD_* bits, and runs the retro-go macro/menu loop each frame.
  *
  * EarthBound's button map:
  *   - SNES L (auto-check)  on G&W A
  *   - SNES B (cancel/dash) on G&W B
- *   - SNES X (town map)    on G&W TIME
+ *   - SNES X (town map)    on G&W GAME
+ *   - FPS overlay toggle   on G&W TIME (via AUX_FPS_TOGGLE → upstream)
+ *   - G&W PAUSE/SET        retro-go menu + chord modifier (save state, etc.)
  *
  * SNES A is unmapped: L's auto-check interacts with the nearest object
  * regardless of facing, so it strictly supersedes A in normal play.
- * SNES Y, Select, Start, and R are unmapped — not needed for the buttons
- * available on a Mario unit.
+ * SNES Y, Select, and R are unmapped — not needed for the buttons available
+ * on a Mario unit.
  *
  * The same mapping works on both Mario and Zelda variants, so there's no
- * get_ofw_is_mario() branch. G&W PAUSE/SET (ODROID_INPUT_VOLUME) is left
- * alone for retro-go's launcher chord (save states, exit, etc.).
+ * get_ofw_is_mario() branch.
+ *
+ * common_emu_input_loop() runs after the gamepad read and before the SNES
+ * translation. When PAUSE/SET-based chords fire (save state, volume,
+ * brightness, …), common_emu_input_loop zeros the joystick so the consumed
+ * inputs don't leak into the SNES PAD_* bits or the aux bitmask.
+ *
+ * The aux bitmask drives upstream's debug hotkeys (game_main.c). We only
+ * expose AUX_FPS_TOGGLE on TIME; the multi-line FPS/logic/render/idle
+ * overlay it triggers is drawn by upstream via a scanline-stamp callback.
+ * game_main.c computes the rising edge itself (aux_new = aux & ~aux_prev),
+ * so we just report the held state.
  */
 
 #include "platform/platform.h"
 #include "pad.h"
+#include "common.h"
 #include "odroid_input.h"
+#include "odroid_overlay.h"
 
 /* Defined in main_earthbound.c; populated by us each frame. */
 extern odroid_gamepad_state_t eb_joystick;
@@ -32,6 +46,18 @@ static uint16_t pad_state;
 static uint16_t pad_prev;
 static uint16_t aux_state;
 static bool quit_requested;
+
+/* No game-specific options yet — the standard retro-go pause-menu entries
+ * (volume, brightness, save/load, exit, …) are all that's exposed. */
+static odroid_dialog_choice_t eb_game_options[] = {
+    ODROID_DIALOG_CHOICE_LAST,
+};
+
+/* Repaint hook for the pause menu's background. EB doesn't expose a "render
+ * the current PPU state on demand" API the way zelda3's DrawPpuFrame does,
+ * so menu backgrounds stay as whatever was last in the LCD buffer. The next
+ * platform_video_send_scanline pass after menu dismissal repaints the game. */
+static void eb_repaint(void) {}
 
 bool platform_input_init(void)
 {
@@ -48,6 +74,11 @@ void platform_input_poll(void)
 {
     odroid_input_read_gamepad(&eb_joystick);
 
+    /* Must run BEFORE the PAD_* translation: when a PAUSE/SET chord fires,
+     * common_emu_input_loop memsets the joystick to 0 to keep the consumed
+     * inputs from being interpreted as SNES button presses. */
+    common_emu_input_loop(&eb_joystick, eb_game_options, &eb_repaint);
+
     pad_prev = pad_state;
 
     uint16_t pad = 0;
@@ -57,7 +88,12 @@ void platform_input_poll(void)
     if (eb_joystick.values[ODROID_INPUT_RIGHT])  pad |= PAD_RIGHT;
     if (eb_joystick.values[ODROID_INPUT_A])      pad |= PAD_L;
     if (eb_joystick.values[ODROID_INPUT_B])      pad |= PAD_B;
-    if (eb_joystick.values[ODROID_INPUT_SELECT]) pad |= PAD_X;
+    if (eb_joystick.values[ODROID_INPUT_START])  pad |= PAD_X;
+
+    /* TIME → AUX_FPS_TOGGLE. PAUSE/SET+TIME (speedup chord) was already
+     * consumed by common_emu_input_loop above, so TIME only reaches here
+     * when pressed standalone. */
+    aux_state = eb_joystick.values[ODROID_INPUT_SELECT] ? AUX_FPS_TOGGLE : 0;
 
     pad_state = pad;
 }
