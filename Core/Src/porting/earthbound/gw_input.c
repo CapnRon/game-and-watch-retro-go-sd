@@ -2,19 +2,24 @@
  * G&W input platform — translates retro-go's odroid_gamepad_state_t into
  * SNES PAD_* bits.
  *
- * Two G&W hardware variants:
- *   Mario unit  (6 buttons): UP/DOWN/LEFT/RIGHT + A + B
- *   Zelda unit (12 buttons): + X + Y + START + SELECT + GAME + TIME
+ * EarthBound's button map:
+ *   - SNES L (auto-check)  on G&W A
+ *   - SNES B (cancel/dash) on G&W B
+ *   - SNES X (town map)    on G&W TIME
  *
- * Detected at runtime via get_ofw_is_mario(). The Mario unit chord-encodes
- * the missing buttons using the GAME (volume) modifier — same scheme as
- * the zelda3 port.
+ * SNES A is unmapped: L's auto-check interacts with the nearest object
+ * regardless of facing, so it strictly supersedes A in normal play.
+ * SNES Y, Select, Start, and R are unmapped — not needed for the buttons
+ * available on a Mario unit.
+ *
+ * The same mapping works on both Mario and Zelda variants, so there's no
+ * get_ofw_is_mario() branch. G&W PAUSE/SET (ODROID_INPUT_VOLUME) is left
+ * alone for retro-go's launcher chord (save states, exit, etc.).
  */
 
 #include "platform/platform.h"
 #include "pad.h"
 #include "odroid_input.h"
-#include "gw_ofw.h"
 
 /* Defined in main_earthbound.c; populated by us each frame. */
 extern odroid_gamepad_state_t eb_joystick;
@@ -46,23 +51,13 @@ void platform_input_poll(void)
     pad_prev = pad_state;
 
     uint16_t pad = 0;
-    if (eb_joystick.values[ODROID_INPUT_UP])    pad |= PAD_UP;
-    if (eb_joystick.values[ODROID_INPUT_DOWN])  pad |= PAD_DOWN;
-    if (eb_joystick.values[ODROID_INPUT_LEFT])  pad |= PAD_LEFT;
-    if (eb_joystick.values[ODROID_INPUT_RIGHT]) pad |= PAD_RIGHT;
-    if (eb_joystick.values[ODROID_INPUT_A])     pad |= PAD_A;
-    if (eb_joystick.values[ODROID_INPUT_B])     pad |= PAD_B;
-
-    bool game_mod = eb_joystick.values[ODROID_INPUT_START];
-    if (!get_ofw_is_mario()) {
-        if (eb_joystick.values[ODROID_INPUT_SELECT]) pad |= PAD_X;
-        if (eb_joystick.values[ODROID_INPUT_Y])      pad |= PAD_Y;
-        if (eb_joystick.values[ODROID_INPUT_X])      pad |= PAD_START;
-    } else {
-        if (game_mod && eb_joystick.values[ODROID_INPUT_B]) pad |= PAD_X;
-        if (eb_joystick.values[ODROID_INPUT_SELECT])        pad |= PAD_Y;
-        if (game_mod && eb_joystick.values[ODROID_INPUT_A]) pad |= PAD_START;
-    }
+    if (eb_joystick.values[ODROID_INPUT_UP])     pad |= PAD_UP;
+    if (eb_joystick.values[ODROID_INPUT_DOWN])   pad |= PAD_DOWN;
+    if (eb_joystick.values[ODROID_INPUT_LEFT])   pad |= PAD_LEFT;
+    if (eb_joystick.values[ODROID_INPUT_RIGHT])  pad |= PAD_RIGHT;
+    if (eb_joystick.values[ODROID_INPUT_A])      pad |= PAD_L;
+    if (eb_joystick.values[ODROID_INPUT_B])      pad |= PAD_B;
+    if (eb_joystick.values[ODROID_INPUT_SELECT]) pad |= PAD_X;
 
     pad_state = pad;
 }

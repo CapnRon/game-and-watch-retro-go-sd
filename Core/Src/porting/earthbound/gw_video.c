@@ -1,26 +1,25 @@
 /*
  * G&W video platform — scanline-based blit into the launcher's LCD buffer.
  *
- * EarthBound renders one scanline at a time (256 px wide BGR565), so we
- * memcpy each scanline directly into lcd_get_active_buffer() at row
- * (y + Y_OFFSET), starting at column X_OFFSET. The launcher's 320x240 LCD
- * has 32 px of black bars on each side and 8 px top/bottom around the
- * 256x224 SNES viewport.
+ * The EB src/ build (Makefile.common: C_DEFS_EARTHBOUND) sets:
+ *   - VIEWPORT_WIDTH=320 VIEWPORT_HEIGHT=240 — PPU outputs scanlines sized
+ *     to the LCD; the 256x224 SNES content is centered by EB itself, with
+ *     the margins filled by BG fill color / black.
+ *   - EB_PIXEL_RGB565=1 — pixel_t is built as RGB565 instead of the default
+ *     BGR565, matching the LTDC layer format (main.c:831). The swap happens
+ *     once per palette entry per frame (256 ops) inside ppu_prepare_palette,
+ *     not per pixel — so this file is a plain memcpy.
  *
- * platform_video_end_frame() does NOT call lcd_swap() here — frame
- * presentation is handled centrally from platform_timer_frame_end() so
- * the swap is synchronized with audio DMA cadence.
+ * platform_video_end_frame() performs the LTDC swap. host_process_frame()
+ * only invokes platform_timer_frame_end() on the fast-forward path, so the
+ * present cannot live there — the SDL port (sdl2_video.c) does the same
+ * thing: end_frame is the present, frame_end is just timing.
  */
 
 #include <string.h>
 
 #include "platform/platform.h"
 #include "gw_lcd.h"
-
-#define EB_VIEWPORT_WIDTH  256
-#define EB_VIEWPORT_HEIGHT 224
-#define X_OFFSET ((GW_LCD_WIDTH  - EB_VIEWPORT_WIDTH)  / 2)
-#define Y_OFFSET ((GW_LCD_HEIGHT - EB_VIEWPORT_HEIGHT) / 2)
 
 bool platform_video_init(void)
 {
@@ -33,13 +32,11 @@ void platform_video_begin_frame(void) {}
 
 void platform_video_send_scanline(int y, const pixel_t *pixels)
 {
-    if (y < 0 || y >= EB_VIEWPORT_HEIGHT) {
+    if (y < 0 || y >= VIEWPORT_HEIGHT) {
         return;
     }
-    uint16_t *fb = lcd_get_active_buffer();
-    memcpy(&fb[(y + Y_OFFSET) * GW_LCD_WIDTH + X_OFFSET],
-           pixels,
-           EB_VIEWPORT_WIDTH * sizeof(pixel_t));
+    uint16_t *dst = &((uint16_t *)lcd_get_active_buffer())[y * GW_LCD_WIDTH];
+    memcpy(dst, pixels, VIEWPORT_WIDTH * sizeof(pixel_t));
 }
 
 pixel_t *platform_video_get_framebuffer(void)
@@ -47,7 +44,14 @@ pixel_t *platform_video_get_framebuffer(void)
     return (pixel_t *)lcd_get_active_buffer();
 }
 
-void platform_video_end_frame(void) {}
+void platform_video_end_frame(void)
+{
+    /* Schedule LTDC to switch to the buffer we just rendered (takes effect
+     * at next vblank), then wait for that vblank so the next frame's writes
+     * don't land in the buffer LTDC is still displaying. */
+    lcd_swap();
+    lcd_wait_for_vblank();
+}
 
 void platform_video_set_vsync(bool enabled)
 {

@@ -41,31 +41,32 @@
 /* Shared with gw_input.c — the platform layer reads from this each frame. */
 odroid_gamepad_state_t eb_joystick;
 
-/* PatchCodeRodataOffset — identical to zelda3's, just with EARTHBOUND
- * symbols. Walks the RAM_EMU region looking for pointers that fall inside
- * RODATA_BASE..RODATA_BASE+ro_size and adjusts them to point at the actual
- * extflash location where odroid_overlay_cache_file_in_flash placed the
- * rodata blob.
- *
- * Skips the main_earthbound.o code window (between _EARTHBOUND_MAIN_CODE_*)
- * because that code lives in the overlay but doesn't reference the offset
- * RODATA_BASE — its rodata is in .overlay_earthbound itself, not the
- * separate .rodata_earthbound region.
- */
-#define RODATA_BASE 0xCAFE0000
+/* Linker-defined start of .rodata_earthbound. Used as the patcher's base —
+ * NOT 0xCAFE0000 (that's .rodata_zelda3's base). Other ports' rodata regions
+ * may precede EB's, so the EB base is layout-dependent and must be a symbol. */
+extern void *__rodata_earthbound_start__[];
+
+/* PatchCodeRodataOffset — walks RAM_EMU looking for pointers that fall inside
+ * .rodata_earthbound's linker VMA range and rewrites them to the actual
+ * runtime address where odroid_overlay_cache_file_in_flash placed the rodata
+ * blob. Skips the main_earthbound.o code window (between
+ * _EARTHBOUND_MAIN_CODE_*) because that code's rodata lives in
+ * .overlay_earthbound itself, not in .rodata_earthbound. */
 static void PatchCodeRodataOffset(uint8_t *rodata, uint32_t rodata_length)
 {
     uint32_t *ptr = (uint32_t *)__RAM_EMU_START__;
     uint32_t *end = (uint32_t *)&_OVERLAY_EARTHBOUND_BSS_END;
 
-    int32_t offset = (uint32_t)rodata - RODATA_BASE;
+    uint32_t rodata_base = (uint32_t)__rodata_earthbound_start__;
+    int32_t offset = (uint32_t)rodata - rodata_base;
 
-    printf("eb rodata = %p offset = 0x%08lX\n", rodata, offset);
+    printf("eb rodata = %p base = 0x%08lX offset = 0x%08lX length = %lu\n",
+           rodata, rodata_base, offset, (unsigned long)rodata_length);
     while (ptr < end) {
         if ((ptr < (uint32_t *)&_EARTHBOUND_MAIN_CODE_START) ||
             (ptr > (uint32_t *)&_EARTHBOUND_MAIN_CODE_END)) {
             uint32_t value = *ptr;
-            if ((value >= RODATA_BASE) && (value < RODATA_BASE + rodata_length)) {
+            if ((value >= rodata_base) && (value < rodata_base + rodata_length)) {
                 *ptr = value + offset;
                 wdog_refresh();
             }
@@ -116,6 +117,11 @@ int app_main_earthbound(uint8_t load_state, uint8_t start_paused, int8_t save_sl
 
     printf("EarthBound start\n");
     ram_start = (uint32_t)&_OVERLAY_EARTHBOUND_BSS_END;
+
+    /* Wipe the launcher's last frame out of both framebuffers — otherwise
+     * the retro-go menu shows through any pixels EB hasn't written yet
+     * (force-blank frames, transitions, etc.). */
+    lcd_clear_buffers();
 
     /* Cache the rodata blob (3 MB of INCBIN'd assets + compiled const tables)
      * from SD into the extflash round-robin cache. */

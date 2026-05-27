@@ -277,6 +277,7 @@ renders it with the PICO-8 palette, and saves as a JPEG cover.
 ### SNES Ports
 - The Legend of Zelda: A Link to the Past
 - Super Mario World
+- EarthBound
 
 ### Homebrew Ports
 - Celeste Classic 
@@ -519,6 +520,30 @@ By default, dialogues extracted from the US ROM are in english. You can replace 
 | Dutch    | Romhack | zelda3_nl.sfc | FA8ADFDBA2697C9A54D583A1284A22AC764C7637 |
 | Swedish  | Romhack | zelda3_sv.sfc | 43CD3438469B2C3FE879EA2F410B3EF3CB3F1CA4 |
 
+### EarthBound
+
+EarthBound runs from a C reimplementation of the game ([`external/earthbound`](external/earthbound)) rather than an emulated SNES ROM. Unlike Zelda 3 and Super Mario World, there is no separate `*_assets.dat` step — the firmware build itself extracts the 3 MB of game data from your donor ROM, packs it into a `.rodata_earthbound` linker section, and emits it as `earthbound.ro` alongside the firmware binaries.
+
+To build:
+
+- clone the project with submodules if not already done:
+  ```git clone --recurse-submodules https://github.com/sylverb/game-and-watch-retro-go-sd```
+- install python requirements: ```python3 -m pip install -r requirements.txt```
+- place the EarthBound US retail donor ROM at `./earthbound.sfc` in the project root, or pass `EARTHBOUND_SFC=/path/to/earthbound.sfc` on the make command line
+- bootstrap the upstream Python toolchain once: `make -C external/earthbound unix-venv` (creates a `.venv` under the submodule and installs `ebtools` into it)
+
+After that, `make flash_sd GNW_TARGET=mario` builds the firmware, runs `ebtools extract` automatically the first time it sees the ROM, and pushes both the launcher binary and `earthbound.ro` (to `/roms/homebrew/earthbound.ro`) onto the SD card. `make release` includes `earthbound.ro` in the update tarball.
+
+Due to the limited set of buttons on the Mario console, the control scheme is minimal:
+
+| Description | Binding on Mario units | Binding on Zelda units |
+| ----------- | ---------------------- | ---------------------- |
+| `L` button (Auto-check) | `A` | `A` |
+| `B` button (Cancel) | `B` | `B` |
+| `X` button (Town map) | `TIME` | `TIME` |
+
+EarthBound's SNES `L` button auto-checks the nearest object regardless of facing direction, so it strictly supersedes SNES `A` in normal play — we give it the always-accessible G&W A button and leave SNES `A` unmapped. SNES `Y`, `Select`, `Start`, and `R` are unmapped.
+
 ### Super Mario World
 
 To play Super Mario world you need to copy the smw_assets.dat file in /roms/homebrew/ folder of your sd card.
@@ -589,6 +614,47 @@ If the game requires to load other carts put them in a ".multicarts" subfolder. 
 If you want to have the official carts covers use the specific python toolpico8covers.py. More details in the [Tools](#tools) section.
 
 ## Developer info
+
+### Local build, flash, and SD-card workflow
+
+For day-to-day development on macOS/Linux (without Docker), the toolchain you need is `arm-none-eabi-gcc` v10+ (we test against 15.2.rel1) and Python 3 with the project's `requirements.txt` (`python3 -m pip install -r requirements.txt`, which installs `gnwmanager`).
+
+#### One-time per-device setup
+
+The device needs SylverB's bootloader installed in bank 1, with Retro-Go-SD itself in bank 2. Without the bootloader, the firmware-update flow that bootstraps the SD card directory tree (`/cores`, `/bios`, `/roms/homebrew`, …) cannot run.
+
+```bash
+# Install the bootloader to bank 1 (one-time):
+gnwmanager flash-bootloader bank1
+```
+
+The repo's `Makefile` defaults `INTFLASH_BANK=2` so all subsequent local builds link Retro-Go for bank 2 to coexist with that bootloader. Override on the command line (`make INTFLASH_BANK=1`) only if you've deliberately installed without the bootloader.
+
+#### First-time SD-card bootstrap
+
+A freshly formatted (exFAT or FAT32) SD card has none of the directories that `sdpush` needs as parents. The bootloader takes care of creating them when it unpacks `retro-go_update.bin`. Run:
+
+```bash
+make release_sdpush GNW_TARGET=mario CHEAT_CODES=1
+```
+
+This builds the release tarball, pushes it to the SD card root, jumps to the bootloader, and `disable-debug`s so the bootloader can finish uninterrupted. **Watch the device's screen** — when the launcher menu appears, the SD card is populated and you're done. (If you call any other `gnwmanager` command mid-extraction, the device resets back into the gnwmanager helper and the extraction is aborted — wait until you see the launcher menu.)
+
+#### Fast-iteration workflow
+
+Once the SD card directory tree exists, the iteration loop is:
+
+```bash
+make flash_sd GNW_TARGET=mario CHEAT_CODES=1
+```
+
+`flash_sd` re-flashes the internal firmware (bank 2) and `sdpush`es just the file artifacts — no tar wrapping, no bootloader handoff. Incremental builds are a no-op when nothing has changed; the slow parts are the `git submodule foreach` safety check and the `sdpush` traffic itself.
+
+#### Common gotchas
+
+- **`CHEAT_CODES=1`.** Several MSX/NES sources reference `MAX_CHEAT_CODES` outside of any `#ifdef`, so a build with `CHEAT_CODES=0` (the global default) fails to link with `MAX_CHEAT_CODES undeclared` in `external/blueMSX-go/Src/Memory/SlotManager.c`. Pass `CHEAT_CODES=1` (the Docker release-build default) to avoid it.
+- **Debug-probe `BAD_DECOMPRESS`.** Some CMSIS-DAP probes drop LZMA chunks at gnwmanager's default speed. The repo's `Makefile` defaults `GNWMANAGER` to `gnwmanager --frequency 1000000` (1 MHz). If your probe is fine at full speed, override with `make GNWMANAGER=gnwmanager …`.
+- **`make` keeps recompiling everything.** Make doesn't track `-D` changes, so if you toggle a `CHEAT_CODES`/`COVERFLOW`/etc. flag between builds, the resulting `.o` files mix the two definitions and link errors appear. `make clean` (or `touch` the affected `.c` files) when you change a `-D` flag.
 
 ### Build and flash using Docker
 
