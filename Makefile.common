@@ -982,6 +982,8 @@ C_DEFS_EARTHBOUND =  \
 -DEB_VIEWPORT_WIDTH=320 \
 -DEB_VIEWPORT_HEIGHT=240 \
 -DEB_PIXEL_RGB565=1 \
+-DENABLE_AUDIO=1 \
+-include Core/Inc/porting/earthbound/eb_alloc.h \
 
 # Items/music headers come from `ebtools generate items-header` and
 # `ebtools generate music-header`. Listed here so the per-object rule
@@ -1084,7 +1086,7 @@ $(EARTHBOUND_ASSETS_MANIFEST): external/earthbound/earthbound.sfc
 	@echo "[ ebtools extract ] from $(EARTHBOUND_SFC)"
 	@$(MAKE) -C external/earthbound unix-venv unix-extract
 
-$(EARTHBOUND_GEN_HEADERS) &: $(EARTHBOUND_ASSETS_MANIFEST) | $(BUILD_DIR)
+$(EARTHBOUND_GEN_HEADERS) &: $(EARTHBOUND_ASSETS_MANIFEST) Makefile.common | $(BUILD_DIR)
 	@echo "[ ebtools pack-all       ]"
 	@cd external/earthbound && . .venv/bin/activate && ebtools pack-all \
 		src/assets $(abspath $(EARTHBOUND_PACKED_DIR)) \
@@ -1094,7 +1096,6 @@ $(EARTHBOUND_GEN_HEADERS) &: $(EARTHBOUND_ASSETS_MANIFEST) | $(BUILD_DIR)
 		asm/bin/assets.manifest asm/bin $(abspath $(EARTHBOUND_GEN_DIR)) src/vendor/incbin \
 		--custom-dir $(abspath $(EARTHBOUND_PACKED_DIR)) \
 		--locale US \
-		--exclude "audiopacks/*" \
 		--exclude "overworld_sprites/gfx/*" \
 		--exclude "US/overworld_sprites/gfx/*" \
 		--exclude "psianims/arrangements/*.arr.lzhal" \

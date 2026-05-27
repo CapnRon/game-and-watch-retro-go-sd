@@ -4,8 +4,10 @@
  * Frame presentation lives in gw_video.c::platform_video_end_frame(); this
  * file only does timing. host_process_frame() only calls frame_end() on the
  * fast-forward path, so a swap here would never fire in the normal path.
- * The launcher's common_emu_sound_sync() is intentionally not called here
- * yet — audio is disabled in the MVP.
+ *
+ * Audio is pumped from platform_timer_frame_start (called at the bottom of
+ * host_process_frame, every frame, including frame-skipped ones) so the
+ * SAI DMA never underruns when the renderer falls behind.
  */
 
 #include "platform/platform.h"
@@ -13,6 +15,7 @@
 #include "gw_lcd.h"
 
 extern void wdog_refresh(void);
+extern void eb_audio_pump(void);
 
 static uint32_t fps_tenths = 600;
 
@@ -31,6 +34,11 @@ void platform_timer_frame_start(void)
      * exceeds frame_period the sleep call returns instantly with no refresh,
      * and we'd WWDG-reset within a second. */
     wdog_refresh();
+
+    /* Refill the inactive half of the SAI DMA buffer with one frame of
+     * APU samples. Runs every frame so skipped renders still keep audio
+     * flowing — the DMA cadence is locked to wall-clock, not draw-rate. */
+    eb_audio_pump();
 }
 
 void platform_timer_frame_end(void)

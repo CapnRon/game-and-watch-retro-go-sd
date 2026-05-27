@@ -2,7 +2,7 @@
  * G&W video platform — scanline-based blit into the launcher's LCD buffer.
  *
  * The EB src/ build (Makefile.common: C_DEFS_EARTHBOUND) sets:
- *   - VIEWPORT_WIDTH=320 VIEWPORT_HEIGHT=240 — PPU outputs scanlines sized
+ *   - EB_VIEWPORT_WIDTH=320 EB_VIEWPORT_HEIGHT=240 — PPU outputs scanlines sized
  *     to the LCD; the 256x224 SNES content is centered by EB itself, with
  *     the margins filled by BG fill color / black.
  *   - EB_PIXEL_RGB565=1 — pixel_t is built as RGB565 instead of the default
@@ -32,11 +32,11 @@ void platform_video_begin_frame(void) {}
 
 void platform_video_send_scanline(int y, const pixel_t *pixels)
 {
-    if (y < 0 || y >= VIEWPORT_HEIGHT) {
+    if (y < 0 || y >= EB_VIEWPORT_HEIGHT) {
         return;
     }
     uint16_t *dst = &((uint16_t *)lcd_get_active_buffer())[y * GW_LCD_WIDTH];
-    memcpy(dst, pixels, VIEWPORT_WIDTH * sizeof(pixel_t));
+    memcpy(dst, pixels, EB_VIEWPORT_WIDTH * sizeof(pixel_t));
 }
 
 pixel_t *platform_video_get_framebuffer(void)

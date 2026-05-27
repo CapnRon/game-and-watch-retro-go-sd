@@ -36,7 +36,10 @@
 
 #pragma GCC optimize("Ofast")
 
-#define EB_AUDIO_SAMPLE_RATE   (16000)
+/* Matches the SPC700/DSP native rate. eb_audio_pump produces 534
+ * stereo samples per game frame, which is the half-buffer SAI consumes
+ * per 16.69 ms at 32 kHz mono — frame and DMA cadence stay aligned. */
+#define EB_AUDIO_SAMPLE_RATE   (32000)
 
 /* Shared with gw_input.c — the platform layer reads from this each frame. */
 odroid_gamepad_state_t eb_joystick;

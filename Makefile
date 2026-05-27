@@ -886,6 +886,10 @@ $(wildcard $(CORE_EARTHBOUND)/src/intro/*.c) \
 $(wildcard $(CORE_EARTHBOUND)/src/platform/*.c) \
 $(wildcard $(CORE_EARTHBOUND)/src/snes/*.c) \
 $(wildcard $(CORE_EARTHBOUND)/src/data/*.c) \
+$(CORE_EARTHBOUND)/src/vendor/lakesnes/snes/apu.c \
+$(CORE_EARTHBOUND)/src/vendor/lakesnes/snes/spc.c \
+$(CORE_EARTHBOUND)/src/vendor/lakesnes/snes/dsp.c \
+$(CORE_EARTHBOUND)/src/vendor/lakesnes/snes/statehandler.c \
 $(CORE_EARTHBOUND)/src/game_main.c \
 $(CORE_EARTHBOUND)/port/gw_retro_go/main.c \
 $(EARTHBOUND_GEN_DIR)/embedded_assets_array.c \
@@ -1087,6 +1091,7 @@ EARTHBOUND_C_INCLUDES +=  \
 -I$(CORE_EARTHBOUND)/src \
 -I$(CORE_EARTHBOUND)/src/include \
 -I$(CORE_EARTHBOUND)/src/vendor/incbin \
+-I$(CORE_EARTHBOUND)/src/vendor/lakesnes/snes \
 -I$(EARTHBOUND_GEN_DIR) \
 -I./
 
