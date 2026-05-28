@@ -983,6 +983,7 @@ C_DEFS_EARTHBOUND =  \
 -DEB_VIEWPORT_HEIGHT=240 \
 -DEB_PIXEL_RGB565=1 \
 -DENABLE_AUDIO=1 \
+-DPPU_PROFILE=1 \
 -include Core/Inc/porting/earthbound/eb_alloc.h \
 
 # Items/music headers come from `ebtools generate items-header` and
@@ -1088,9 +1089,17 @@ $(EARTHBOUND_ASSETS_MANIFEST): external/earthbound/earthbound.sfc
 
 $(EARTHBOUND_GEN_HEADERS) &: $(EARTHBOUND_ASSETS_MANIFEST) Makefile.common | $(BUILD_DIR)
 	@echo "[ ebtools pack-all       ]"
+	# EB's gnw-port branch keeps human-authored YAML/JSON sources under
+	# port/assets/ (not src/assets/). pack-all also generates a C header
+	# (text_refs.h) into the source tree; by default it computes that path
+	# as <assets_dir>/../data, which would be port/data — a directory that
+	# doesn't exist. The C port includes the header as "data/text_refs.h",
+	# so we want it written into src/data/. --text-refs-dir overrides the
+	# inferred location.
 	@cd external/earthbound && . .venv/bin/activate && ebtools pack-all \
-		src/assets $(abspath $(EARTHBOUND_PACKED_DIR)) \
-		-b asm/bin -y earthbound.yml -c commondefs.yml
+		port/assets $(abspath $(EARTHBOUND_PACKED_DIR)) \
+		-b asm/bin -y earthbound.yml -c commondefs.yml \
+		--text-refs-dir src/data
 	@echo "[ ebtools embed-registry ]"
 	@cd external/earthbound && . .venv/bin/activate && ebtools embed-registry \
 		asm/bin/assets.manifest asm/bin $(abspath $(EARTHBOUND_GEN_DIR)) src/vendor/incbin \
