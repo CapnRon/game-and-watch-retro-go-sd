@@ -1,5 +1,7 @@
 /*
- * G&W timer platform — frame pacing via HAL_GetTick (1 ms resolution).
+ * G&W timer platform — monotonic clock via DWT->CYCCNT (CPU-cycle resolution,
+ * ~280 MHz on H7B0). HAL_GetTick (1 ms) is retained only for the FPS IIR
+ * filter, which is intentionally ms-scaled.
  *
  * Frame presentation lives in gw_video.c::platform_video_end_frame(); this
  * file only does timing. host_process_frame() only calls frame_end() on the
@@ -13,6 +15,7 @@
 #include "platform/platform.h"
 #include "stm32h7xx_hal.h"
 #include "gw_lcd.h"
+#include "porting/common.h"
 
 extern void wdog_refresh(void);
 extern void eb_audio_pump(void);
@@ -24,10 +27,20 @@ extern void eb_audio_pump(void);
 static uint32_t period_acc;
 static uint32_t last_fps_tick;
 
+/* 32→64-bit extension of DWT->CYCCNT. CYCCNT wraps every ~15 s at 280 MHz;
+ * platform_timer_ticks() is called every frame, so any single call observes
+ * at most one wrap since the previous call. Single-threaded (game fiber +
+ * host loop run sequentially), so no synchronization needed. */
+static uint32_t last_cyc;
+static uint64_t cyc_high;
+
 bool platform_timer_init(void)
 {
     period_acc = 0;
     last_fps_tick = 0;
+    common_emu_enable_dwt_cycles();
+    last_cyc = DWT->CYCCNT;
+    cyc_high = 0;
     return true;
 }
 
@@ -74,12 +87,17 @@ void platform_timer_sleep_until(uint64_t deadline)
 
 uint64_t platform_timer_ticks(void)
 {
-    return HAL_GetTick();
+    uint32_t now = DWT->CYCCNT;
+    if (now < last_cyc) {
+        cyc_high += 0x100000000ULL;
+    }
+    last_cyc = now;
+    return cyc_high + now;
 }
 
 uint64_t platform_timer_ticks_per_sec(void)
 {
-    return 1000;
+    return SystemCoreClock;
 }
 
 uint32_t platform_timer_get_fps_tenths(void)
