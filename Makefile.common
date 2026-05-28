@@ -1008,14 +1008,17 @@ EARTHBOUND_GEN_HEADERS = \
 	$(EARTHBOUND_GEN_DIR)/embedded_assets_decl.h
 
 # function used to generate prerequisite rules for earthbound objects.
-# EarthBound is the perf-critical target on this firmware, so bump -O2 → -O3
-# just for EB sources. The trailing -O3 wins over $(CFLAGS)'s -O2 because GCC
-# uses the last -O switch on the command line. Other overlays (md/zelda3/smw)
-# stay at -O2 because -O3 inflates their .text/.bss enough to overflow RAM_EMU.
+# NOTE: reverted to -O2. -O3 worked up to the title/file-select screen but
+# BSODs (imprecise bus fault, CFSR=0x400) when loading a file and entering the
+# overworld — a wild store from a latent UB that -O3's codegen exposes but -O2
+# leaves benign. -fno-strict-aliasing did not fix it, so it's not aliasing
+# (likely an uninitialized pointer landing on a bus-rejecting address at -O3).
+# The trailing -O2 wins over $(CFLAGS) because GCC uses the last -O switch.
+# Re-bump to -O3 only after root-causing the wild store (gdb single-step).
 define earthbound_obj_prereq_gen
 $$(BUILD_DIR)/earthbound/$(patsubst %.c,%.o,$(notdir $1)): $1 Makefile.common Makefile $$(SDK_HEADERS) $$(EARTHBOUND_GEN_HEADERS) $$(EARTHBOUND_HEADERS_EXTRA) | $$(BUILD_DIR)
 	$$(V)$$(ECHO) [ CC earthbound ] $$(notdir $$<)
-	$$(V)$$(CC) -c $$(CFLAGS) $$(C_DEFS_EARTHBOUND) $$(EARTHBOUND_C_INCLUDES) -Wa,-a,-ad,-alms=$$(BUILD_DIR)/earthbound/$$(notdir $$(<:.c=.lst)) $$< -o $$@ -O3 \
+	$$(V)$$(CC) -c $$(CFLAGS) $$(C_DEFS_EARTHBOUND) $$(EARTHBOUND_C_INCLUDES) -Wa,-a,-ad,-alms=$$(BUILD_DIR)/earthbound/$$(notdir $$(<:.c=.lst)) $$< -o $$@ -O2 \
 	-Wno-parentheses -Wno-unknown-pragmas -Wno-incompatible-pointer-types -Wno-unused-const-variable -Wno-strict-aliasing -Wno-comment -Wno-unused-function -Wno-stack-usage -Wno-int-in-bool-context -Wno-unused-variable -Wno-unused-but-set-variable -Wno-implicit-function-declaration
 	$$(V)$$(CP) --redefine-syms=earthbound_redefines $$@
 

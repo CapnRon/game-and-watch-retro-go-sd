@@ -141,6 +141,7 @@ __attribute__((optimize("-O0"))) void BSOD(BSOD_t fault, uint32_t pc, uint32_t l
 {
   char msg[128];
   char regs[64];
+  char regs2[80];
   size_t i = 0;
   char *start;
   char *end;
@@ -151,6 +152,13 @@ __attribute__((optimize("-O0"))) void BSOD(BSOD_t fault, uint32_t pc, uint32_t l
 
   snprintf(msg, sizeof(msg), "FATAL EXCEPTION: %s %s", fault_list[fault], GIT_TAG);
   snprintf(regs, sizeof(regs), "PC=0x%08lx LR=0x%08lx", pc, lr);
+  // CFSR/HFSR/BFAR are sticky until written, so they still hold the fault
+  // cause here. CFSR bit 15 (BFARVALID) => BFAR holds the faulting address
+  // (precise bus fault). CFSR bit 10 (IMPRECISERR) => the faulting store is
+  // NOT at PC (store-buffer drained late); PC is innocent.
+  snprintf(regs2, sizeof(regs2), "CFSR=0x%08lx HFSR=0x%08lx BFAR=0x%08lx",
+           (unsigned long)SCB->CFSR, (unsigned long)SCB->HFSR,
+           (unsigned long)SCB->BFAR);
 
   lcd_sync();
   lcd_reset_active_buffer();
@@ -158,6 +166,7 @@ __attribute__((optimize("-O0"))) void BSOD(BSOD_t fault, uint32_t pc, uint32_t l
 
   y += odroid_overlay_draw_text(0, y, GW_LCD_WIDTH, msg, C_RED, C_BLUE);
   y += odroid_overlay_draw_text(0, y, GW_LCD_WIDTH, regs, C_RED, C_BLUE);
+  y += odroid_overlay_draw_text(0, y, GW_LCD_WIDTH, regs2, C_RED, C_BLUE);
 
   // Print each line from the log in reverse
   end = &logbuf[strnlen(logbuf, sizeof(logbuf)) - 1];
