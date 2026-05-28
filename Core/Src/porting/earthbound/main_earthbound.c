@@ -55,19 +55,15 @@ extern void *__rodata_earthbound_start__[];
  * blob. Skips the main_earthbound.o code window (between
  * _EARTHBOUND_MAIN_CODE_*) because that code's rodata lives in
  * .overlay_earthbound itself, not in .rodata_earthbound. */
-static void PatchCodeRodataOffset(uint8_t *rodata, uint32_t rodata_length)
+static void PatchRodataRange(uint32_t *ptr, uint32_t *end,
+                             uint32_t rodata_base, int32_t offset,
+                             uint32_t rodata_length, bool skip_main_code)
 {
-    uint32_t *ptr = (uint32_t *)__RAM_EMU_START__;
-    uint32_t *end = (uint32_t *)&_OVERLAY_EARTHBOUND_BSS_END;
-
-    uint32_t rodata_base = (uint32_t)__rodata_earthbound_start__;
-    int32_t offset = (uint32_t)rodata - rodata_base;
-
-    printf("eb rodata = %p base = 0x%08lX offset = 0x%08lX length = %lu\n",
-           rodata, rodata_base, offset, (unsigned long)rodata_length);
     while (ptr < end) {
-        if ((ptr < (uint32_t *)&_EARTHBOUND_MAIN_CODE_START) ||
-            (ptr > (uint32_t *)&_EARTHBOUND_MAIN_CODE_END)) {
+        bool in_skip_window = skip_main_code &&
+            (ptr >= (uint32_t *)&_EARTHBOUND_MAIN_CODE_START) &&
+            (ptr <= (uint32_t *)&_EARTHBOUND_MAIN_CODE_END);
+        if (!in_skip_window) {
             uint32_t value = *ptr;
             if ((value >= rodata_base) && (value < rodata_base + rodata_length)) {
                 *ptr = value + offset;
@@ -76,6 +72,23 @@ static void PatchCodeRodataOffset(uint8_t *rodata, uint32_t rodata_length)
         }
         ptr++;
     }
+}
+
+static void PatchCodeRodataOffset(uint8_t *rodata, uint32_t rodata_length)
+{
+    uint32_t rodata_base = (uint32_t)__rodata_earthbound_start__;
+    int32_t offset = (uint32_t)rodata - rodata_base;
+
+    printf("eb rodata = %p base = 0x%08lX offset = 0x%08lX length = %lu\n",
+           rodata, rodata_base, offset, (unsigned long)rodata_length);
+
+    /* RAM_EMU: overlay code + bss. Skip the main_earthbound.o code window
+     * because that code's local rodata lives in .overlay_earthbound itself
+     * (not in .rodata_earthbound) and patching its instructions would risk
+     * corrupting code bytes that coincidentally match the rodata VMA range. */
+    PatchRodataRange((uint32_t *)__RAM_EMU_START__,
+                     (uint32_t *)&_OVERLAY_EARTHBOUND_BSS_END,
+                     rodata_base, offset, rodata_length, /*skip_main_code=*/true);
 }
 
 static void *Screenshot(void)
