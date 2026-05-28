@@ -978,6 +978,7 @@ $(eval $(foreach obj,$(SMW_C_SOURCES),$(call smw_obj_prereq_gen,$(obj))))
 C_DEFS_EARTHBOUND =  \
 -DEB_EMBEDDED=1 \
 -DEB_NORELOC_REQUIRED=1 \
+-DEB_B_OPENS_MAIN_MENU=1 \
 -DUSA=1 \
 -DEB_VIEWPORT_WIDTH=320 \
 -DEB_VIEWPORT_HEIGHT=240 \
