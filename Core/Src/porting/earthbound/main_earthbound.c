@@ -54,7 +54,17 @@ extern void *__rodata_earthbound_start__[];
  * runtime address where odroid_overlay_cache_file_in_flash placed the rodata
  * blob. Skips the main_earthbound.o code window (between
  * _EARTHBOUND_MAIN_CODE_*) because that code's rodata lives in
- * .overlay_earthbound itself, not in .rodata_earthbound. */
+ * .overlay_earthbound itself, not in .rodata_earthbound.
+ *
+ * NON-OBVIOUS: this scans RAM_EMU ONLY. .rodata_earthbound loads to a runtime
+ * address that VARIES per boot, so every literal-pool pointer into it must be
+ * rewritten here or it keeps the 0xCAFF.. *link* address and faults on first
+ * use (symptom: BSOD with PC inside newlib _vfiprintf_r — a garbage printf
+ * format-string pointer). Therefore if you ever relocate an EarthBound .o's
+ * code/data OUT of .overlay_earthbound (e.g. into ITCM), it is no longer
+ * scanned and you must run PatchRodataRange() over the new location too, with
+ * the SAME base/offset. (Tried & reverted: ppu_render.o → ITCM — link/runtime
+ * worked once patched, but gave no FPS gain; EB render is compute-bound.) */
 static void PatchRodataRange(uint32_t *ptr, uint32_t *end,
                              uint32_t rodata_base, int32_t offset,
                              uint32_t rodata_length, bool skip_main_code)
