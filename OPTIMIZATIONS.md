@@ -1,9 +1,33 @@
-# EarthBound PPU — pending optimization ideas
+# EarthBound PPU — optimization log & pending ideas
 
 Profile baseline: with `PPU_PROFILE=1` the FPS overlay reports BG ≈ 50% and
-CLR ≈ 25% of per-frame PPU time. Ideas below are roughly ordered by
-expected payoff vs. effort. Source line references are to
+CLR ≈ 25% of per-frame PPU time. Source line references are to
 `external/earthbound/src/snes/ppu_render.c` unless otherwise noted.
+
+## Shipped gains — the real bottleneck was vsync quantization
+
+EB's original ~20 fps cap was **vsync quantization**, not PPU compute. Two
+commits on `earthbound` (shipped) prove it:
+
+- `127a20f3` triple-buffering: **20 → 28 fps**
+- `7fc78e11` `-O3` on `ppu_render.c` only: **28 → 30.3 fps**
+- **#4 skip `line_out` clear in wide mode** (below): **30.3 → 33.3 fps**
+  (CLR 50 → 30, TOTAL 238 → 217 in 0.1 ms units).
+
+Key lesson from this work: **eliminating work beats relocating it.** Every
+attempt to move the *same* work to faster memory (ITCM/DTCM, see "Reverted")
+landed in the noise; the only post-vsync wins came from *removing* work
+(`-O3` codegen, and #4's dead memset). EB is otherwise **compute-bound** at
+280 MHz — three full-width layers composited in software with no single hotspot
+that memory-placement or cache tuning can fix. When hunting further gains, look
+for redundant/dead work, not faster homes for existing work.
+
+**The remaining real levers are not micro-optimizations:**
+- **Frameskip.** zelda3 — the same per-scanline software-PPU architecture, also
+  capped at ~30 fps — ships `ZELDA3_LIMIT_30FPS=1` (renders every other game
+  frame). Deferred so far in favor of compute headroom, but ITCM/DTCM/packing
+  experiments have now shown there is no compute headroom to find.
+- **Algorithmic PPU changes** (reduce per-pixel/per-tile work, not relocate it).
 
 ## Reverted: EarthBound-wide -O3
 
@@ -20,168 +44,157 @@ expected payoff vs. effort. Source line references are to
   pointer landing on a bus-rejecting address) that `-O3` codegen exposes but
   `-O2` leaves benign. Adding `-fno-strict-aliasing` did **not** fix it, so it
   is not an aliasing bug.
-- **Action taken:** reverted EB sources to `-O2` in `Makefile.common`
-  (`earthbound_obj_prereq_gen`). **Do not** re-bump to `-O3` until the wild
-  store is root-caused.
+- **Action taken:** EB sources stay at `-O2` in `Makefile.common`
+  (`earthbound_obj_prereq_gen`); only `ppu_render.c` is forced to `-O3` via
+  `PPU_FORCE_SPEED_OPT` (that TU is not on the file-load path). **Do not**
+  re-bump the whole EB build to `-O3` until the wild store is root-caused.
 - **How to root-cause when revisiting:** the BSOD now prints `CFSR`/`HFSR`/`BFAR`
   (added to `BSOD()` in `Core/Src/main.c`). Use `gdb` single-step — each step
   drains the store buffer, making the fault precise so `BFAR` pins the address.
   Start from the file-select-confirm handler down through `reset_party_state()`
   in `overworld.c`.
 
-## Pending wins
+## Reverted: ITCM placement (both code and VRAM) — measured dead end
 
-### 1. DTCM placement of per-scanline working buffers
+Two hardware A/B tests on the G&W (60-frame BGPROF average, overworld; values
+in 0.1 ms units as reported by `PPU_PROFILE`):
 
-The buffers at `ppu_render.c:844-861` (line_out, best_bg_color,
-best_bg_gp_lm, sub_bg_color/gp, obj_color/prio, eff_tm/ts_line,
-cm_prevented_line, the temp_* set) are accessed every pixel and memset
-every scanline. They total ~7 KB and currently sit in RAM_EMU (AXI
-SRAM, cached). DTCM is single-cycle dual-ported for data — eliminates
-d-cache lookups and AXI contention with code fetches.
+| Config | TOTAL | BG |
+|--------|-------|-----|
+| **A (baseline)** — all code/data in cacheable AXI-SRAM | 238 | 118 |
+| **B — VRAM → ITCM** (64 KB buffer) | 234 | **120** |
+| **C — hot code → ITCM** (`ppu_render.o .text`, ~16 KB) | 239 | 119 |
 
-Mechanism (already wired up upstream):
-- `-DPPU_LINEBUF_ATTR='__attribute__((section(".dtcm_eb")))'` in
-  `C_DEFS_EARTHBOUND`.
-- New `.dtcm_eb (NOLOAD)` output section between `.bss` and
-  `._user_heap` in `STM32H7B0VBTx_SDCARD.ld`.
+All three are within run-to-run jitter (~2% of ~24 ms). In config B the BG read
+path it targets actually got *worse* (118 → 120). **ITCM is a confirmed dead end
+for EB FPS** — the render is neither VRAM-read-latency-bound (B) nor
+I-cache-eviction-bound (C; the hot code was already I-cache-resident). Both
+experiments were fully reverted (no residual changes in `external/earthbound`
+or the firmware).
 
-Blocker: only ~1.5 KB of DTCM padding is currently free (.map shows
-`__dtc_padding_end__ - __dtc_padding_start__ = 0x5F0`). Need to free
-~7 KB by one of:
-- Shrinking `_Heap_Size` (currently 85K; PICO-8 needs 64K single
-  allocation, ~13K headroom would remain).
-- Shrinking `_Min_Stack_Size` (currently 24K).
-- Accepting only a hottest-subset that fits in 1.5K (e.g.
-  best_bg_gp_lm + cgram_render).
+Implementation notes, in case ITCM is ever revisited for a *different* reason
+(e.g. freeing RAM_EMU, not speed):
 
-Expected gain: ~3-4× CLR; 15-30% BG (per-pixel store is the hot path).
+- **VRAM → ITCM:** gate `ppu.vram` on `PPU_VRAM_EXTERNAL` (pointer vs inline
+  array, keep it the FIRST struct field); `ppu_init` must preserve+zero the
+  pointer **unconditionally** (ITCM base is `0x0`, so a valid buffer can have
+  address 0 — never NULL-test it); the port calls `itc_calloc(1,0x10000)` +
+  `ppu_set_vram()` (failure sentinel is `0xffffffff`, not NULL). The 13
+  `sizeof(ppu.vram)` bounds checks (sprite/overworld/map_loader) MUST become
+  `VRAM_SIZE` or a pointer silently collapses them to 4 and drops VRAM writes.
+- **Code → ITCM:** a linker `.eb_itcram` section (VMA=ITCM, `AT > CORES`)
+  selecting `build/earthbound/ppu_render.o (.text .text*)`, placed *before*
+  `.overlay_earthbound` so first-match pulls it out of the overlay (no
+  EXCLUDE_FILE). Ship it as a separate `EarthBound_itcm.bin`; at boot stage it
+  through RAM then `memcpy` → ITCM (the SD path may DMA, and **ITCM is not
+  DMA-reachable**) + `DSB`/`ISB`. The linker auto-inserts long-call veneers
+  (`__printf_veneer`, `__memset_veneer`, …) at the end of the section.
+- **★ Critical gotcha (cost a BSOD):** `PatchCodeRodataOffset` in
+  `main_earthbound.c` scans **RAM_EMU only**. `.rodata_earthbound` (printf
+  format strings, LUTs, the asset blob) loads to a per-boot-varying address and
+  every literal-pool pointer to it is rewritten by that scan. Any `.o` whose
+  code/data you move OUT of `.overlay_earthbound` is no longer scanned, so its
+  rodata pointers keep the `0xCAFF..` link address → BSOD with PC inside newlib
+  `_vfiprintf_r` (garbage format string). Fix: re-run `PatchRodataRange()` over
+  the relocated region with the SAME base/offset. (Now documented in the
+  `PatchCodeRodataOffset` comment, commit `ddbfd4a9`.)
 
-### 2. AoS-pack `main_color[]` + `main_gp_lm[]` into one `uint32_t`
+## Reverted: DTCM placement of per-scanline buffers (was idea #1)
 
-In `emit_tile_run` (`ppu_render.c:243-247`), every winning pixel does
-two 16-bit stores to two separate arrays:
+The per-scanline working buffers (`line_out`, `best_bg_color/gp_lm`,
+`sub_bg_*`, `obj_*`, `eff_tm/ts_line`, `cm_prevented_line`, the `temp_*` set,
+~7 KB) were moved to DTCM. **Zero measurable gain.** They are touched every
+pixel of every scanline, so they are *already* permanently d-cache resident in
+their AXI-SRAM home — an M7 cache hit is ~1 cycle = DTCM speed, and there were
+no misses to remove. The "AXI contention with code fetch" rationale is also
+near-zero since hot loops run from the I-cache. (Only ~1.5 KB of DTCM padding
+was free anyway.) Scaffolding (`.dtcm_eb` section, `-DPPU_LINEBUF_ATTR`) removed.
 
-```c
-ctx->main_gp_lm[_sx] = gp_lm;
-ctx->main_color[_sx] = _rgb;
-```
+## Reverted: AoS-packed pixel stores (was idea #2)
 
-Pack into one `uint32_t` (color in upper half, gp_lm in lower):
+`main_color[]` + `main_gp_lm[]` packed into one `uint32_t` per pixel. On
+hardware this was a **net loss**: the per-scanline clear doubled (memset
+2 → 4 B/pixel, since packing forces clearing the color half too), while the
+priority check was already a single load — so the second store just became a
+pack `orr` and the M7 store buffer had already been pipelining the two narrow
+stores. CLR got worse, BG unchanged. Reverted.
 
-```c
-ctx->main_pixel[_sx] = ((uint32_t)_rgb << 16) | gp_lm;
-```
+## Forward-looking ideas (untested or lower-priority)
 
-The priority-check load above also collapses to one `LDR`. Same trick
-for `sub_bg_color`+`sub_bg_gp` (sub_bg_gp is uint8 — pack into a uint32
-with color in the high bits).
+These are per-pixel/per-scanline *work reductions* (not relocations), which is
+the category that might still help a compute-bound renderer. Measure each
+against the BGPROF baseline before committing.
 
-Expected gain: 10-15% on BG. Touches upstream `ppu_render.c`; portable,
-helps the Pico port too.
+### 4. Skip `memset(line_out, 0)` in wide mode — ✅ DONE (30.3 → 33.3 fps)
 
-### 3. ITCM placement of hot PPU functions
+In wide mode (`fb_x_offset == 0 && render_width == EB_VIEWPORT_WIDTH`) the
+compositor writes every output pixel (verified: the composite loop covers
+`[0, EB_VIEWPORT_WIDTH)` with no per-pixel skips), so the per-scanline
+`line_out` clear only ever painted left/right borders that don't exist there.
+Guarded the clear on a hoisted loop-invariant (`line_out_full_cover`). Removed
+640 B × 240 ≈ 150 KB/frame of memset. **Measured: CLR 50 → 30, TOTAL 238 → 217,
+FPS 30.3 → 33.3 (+10%).** The vertical-border-scanline clear and the
+non-wide/centered path are untouched.
 
-Move `render_bg_scanline`, `decode_*bpp_row`, `render_obj_scanline`,
-`precompute_window_masks`, `ppu_render_frame_ex` to ITCMRAM (64 KB
-unused per `STM32H7B0VBTx_SDCARD.ld:129`). Zero-wait-state I-bus
-fetch frees AXI bandwidth for data accesses.
+### 5. Combine the per-scanline memsets — ❌ NOT WORTH IT (declined)
 
-Scaffolding already in place (current branch):
-- `.itcm_eb_text` section in linker, VMA in ITCMRAM, LMA via `AT > CORES`.
-- `PPU_RAM_SECTION='".itcm_eb_text"'` in `C_DEFS_EARTHBOUND`.
-- `objcopy --only-section=.itcm_eb_text` extracts `earthbound.itcm`.
-- `sdpush` rule for `earthbound.itcm`.
-- `__itcm_eb_text_*` and `_ITCM_EB_TEXT_SIZE` declared in `gw_linker.h`.
-
-Needs runtime wiring in `app_main_earthbound`:
-- `odroid_overlay_cache_file_in_ram("/roms/homebrew/earthbound.itcm",
-  (uint8_t *)__itcm_eb_text_start__)` before `PatchCodeRodataOffset`.
-- `SCB_InvalidateICache_by_Addr` over the loaded range.
-- Extend `PatchRodataRange` call to also scan
-  `[__itcm_eb_text_start__, __itcm_eb_text_end__)` for 0xCAFE.... refs
-  in the freshly loaded literal pools.
-- Halt with a clear message if the file is missing — code is linked
-  at ITCM addresses, so the section must be present.
-
-Build verified: section is 15.4 KB. Linker auto-inserts long-call
-veneers (`__memset_veneer`, `__platform_timer_ticks_veneer`, 8 B each)
-for cross-region calls.
-
-Expected gain: 10-20% on BG and OBJ.
-
-### 4. Skip `memset(line_out, 0)` in wide mode
-
-`ppu_render.c:1077` clears 640 B per scanline. In wide mode
-(`fb_x_offset == 0 && render_width == EB_VIEWPORT_WIDTH`) the
-compositing loop fully overwrites the line — the clear is dead work.
-640 B × 240 scanlines ≈ 150 KB of redundant memset per frame.
-
-One-line guard. Expected gain: 5-10% off CLR.
-
-### 5. Combine the per-scanline memsets
-
-CLR currently issues up to 4 separate memsets (best_bg_gp_lm, sub_bg_gp,
-obj_prio, line_out). If laid out contiguously in BSS, one larger memset
-is meaningfully faster than four small ones (per-call setup amortized,
-better burst sizes).
-
-Either rely on careful BSS symbol ordering (fragile) or wrap into a
-single per-frame `linebuf` struct in `ppu_render.c`. Also opens the
-door to a custom 64-bit-unrolled memset for these specific buffers.
-
-Expected gain: 5-10% off CLR. Stacks with #1 (memset to DTCM is
-already fast; combining helps cache-resident memset most).
-
-## Lower-priority / verify-first
+The idea was to fold CLR's separate memsets into one. But the remaining clears
+are *already* conditionally skipped — `sub_bg_gp` only on color-math scanlines
+(rare), `obj_prio` only when sprites are enabled. Those `if`s ARE the
+work-elimination this item wanted. Combining into one contiguous unconditional
+memset would FORCE the usually-skipped `sub_bg_gp` clear on most scanlines —
+adding work (the same failure mode as the reverted AoS-pack). A careful combine
+that preserves the conditionals saves only ~one memset *call* setup per scanline
+(the zeroing *work* is irreducible) = sub-noise, while adding fragile BSS-layout
+coupling to the hot path. After #4 took the one real work-elimination in CLR,
+nothing here is worth the risk.
 
 ### 6. Hoist `hflip` out of EMIT_PIXELS
 
-`ppu_render.c:236` has a per-pixel `hflip ? (7 - (start_px + _i)) : ...`
-branch on a loop-invariant. -O3 may already hoist this — check the
-.lst before adding macro complexity. If not, split EMIT_PIXELS into
-hflip/no-hflip variants (4 forms combined with HAS_SUB).
+`ppu_render.c:236` has a per-pixel `hflip ? (7 - (start_px + _i)) : ...` branch
+on a loop-invariant. `ppu_render.c` is built at `-O3`, which may already hoist
+it — check the `.lst` before adding macro complexity. If not, split EMIT_PIXELS
+into hflip/no-hflip variants (4 forms combined with HAS_SUB).
 
 ### 7. Specialize `emit_tile_run` on bpp
 
 `bpp` is a parameter (already `always_inline`'d). The compiler should
-const-propagate through inlining at -O3. Verify in the .lst before
+const-propagate through inlining at `-O3`. Verify in the `.lst` before
 hand-specializing.
 
 ### 8. Improve tile-row cache hash
 
 `ppu_render.c:203`: `((tile_addr >> 1) ^ pixel_y) & TILE_CACHE_MASK`.
-Direct-mapped 256-entry; collisions on neighboring rows are common.
-A multiplicative hash (`(tile_addr * 0x9E3779B1u + pixel_y) >> 24`)
-typically distributes better. Net win depends on the current hit rate
-(stated ≥85% in the comment) — measure first.
+Direct-mapped 256-entry; collisions on neighboring rows are common. A
+multiplicative hash (`(tile_addr * 0x9E3779B1u + pixel_y) >> 24`) typically
+distributes better. Net win depends on the current hit rate (BGPROF reports
+~66% on the overworld) — measure first.
 
 ### 9. Verify sub-screen elimination when color math is off
 
-The `EMIT_PIXELS(HAS_SUB=0)` macro path (`ppu_render.c:258-261`) should
-fully eliminate sub-screen work when `ctx->sub_gp == NULL`. Confirm in
-the .lst that no spurious sub-buffer accesses survive — if they don't,
-nothing to do here.
+The `EMIT_PIXELS(HAS_SUB=0)` macro path (`ppu_render.c:258-261`) should fully
+eliminate sub-screen work when `ctx->sub_gp == NULL`. Confirm in the `.lst`
+that no spurious sub-buffer accesses survive — if they don't, nothing to do.
 
 ### 10. Verify window-mask cache hit rate
 
-`precompute_window_masks` already has a memcmp-based cache key
-(`win_cache_key`, `ppu_render.c:1117-1126`). If every scanline misses
-the cache, the WIN phase is paying full price each line. Quick PMU
-instrumentation would settle it.
+`precompute_window_masks` already has a memcmp-based cache key (`win_cache_key`,
+`ppu_render.c:1117-1126`). If every scanline misses the cache, the WIN phase is
+paying full price each line. Quick PMU instrumentation would settle it.
 
 ## Notes / instrumentation
 
 - The PPU profile timings come from `platform_timer_ticks()`
-  (`Core/Src/porting/earthbound/gw_timer.c`). Verify it isn't itself
-  a non-trivial fraction of measured time — called many times per
-  scanline.
-- The Cortex-M7 PMU can count cache misses directly
-  (`DWT_CTRL`/`DWT_CYCCNT` + event counters). If a specific theory needs
-  verification (e.g. "is d-cache thrashing the per-line buffers?"),
-  wire one event into the existing PPU_PROFILE struct.
-- Useful one-off measurements before committing to #1:
-  - `arm-none-eabi-size build/earthbound/ppu_render.o` — code size of
-    the hot translation unit; informs i-cache pressure.
-  - `__bss_end__` of `.overlay_earthbound_bss` — working set, informs
-    d-cache pressure.
+  (`Core/Src/porting/earthbound/gw_timer.c`). Verify it isn't itself a
+  non-trivial fraction of measured time — called many times per scanline.
+- The Cortex-M7 PMU can count cache misses directly (`DWT_CTRL`/`DWT_CYCCNT` +
+  event counters). If a specific theory needs verification (e.g. "is d-cache
+  thrashing the per-line buffers?"), wire one event into the PPU_PROFILE struct.
+  Given the ITCM/DTCM results above, **wire the PMU before trying any further
+  memory-placement idea** — blind placement tuning has a perfect failure record
+  here.
+- Useful one-off measurements:
+  - `arm-none-eabi-size build/earthbound/ppu_render.o` — code size of the hot
+    translation unit; informs i-cache pressure (it is ~16 KB = the full I-cache).
+  - `__bss_end__` of `.overlay_earthbound_bss` — working set, informs d-cache
+    pressure.
