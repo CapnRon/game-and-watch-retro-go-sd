@@ -1,13 +1,16 @@
 # EarthBound PPU — optimization log & pending ideas
 
-Profile baseline: with `PPU_PROFILE=1` the FPS overlay reports BG ≈ 50% and
-CLR ≈ 25% of per-frame PPU time. Source line references are to
+**Current state: ~33.5 fps** (overworld), up from ~20 at the start. Per-frame
+PPU render ≈ 21.4 ms (BGPROF `TOTAL=214`, 0.1 ms units): `BG≈118` (~55%, the
+3-layer software compositing — irreducible), `CLR≈30` (~14%, *internal*
+per-scanline buffers — NOT the framebuffer, see "Async-clear" below), `SND≈6`,
+remainder = WIN/OBJ/composite/send. Source line references are to
 `external/earthbound/src/snes/ppu_render.c` unless otherwise noted.
 
 ## Shipped gains — the real bottleneck was vsync quantization
 
-EB's original ~20 fps cap was **vsync quantization**, not PPU compute. Two
-commits on `earthbound` (shipped) prove it:
+EB's original ~20 fps cap was **vsync quantization**, not PPU compute. The
+shipped wins on `earthbound`, in order:
 
 - `127a20f3` triple-buffering: **20 → 28 fps**
 - `7fc78e11` `-O3` on `ppu_render.c` only: **28 → 30.3 fps**
@@ -125,11 +128,7 @@ priority check was already a single load — so the second store just became a
 pack `orr` and the M7 store buffer had already been pipelining the two narrow
 stores. CLR got worse, BG unchanged. Reverted.
 
-## Forward-looking ideas (untested or lower-priority)
-
-These are per-pixel/per-scanline *work reductions* (not relocations), which is
-the category that might still help a compute-bound renderer. Measure each
-against the BGPROF baseline before committing.
+## Attempted this session (done / declined)
 
 ### 4. Skip `memset(line_out, 0)` in wide mode — ✅ DONE (30.3 → 33.3 fps)
 
@@ -154,6 +153,46 @@ that preserves the conditionals saves only ~one memset *call* setup per scanline
 (the zeroing *work* is irreducible) = sub-noise, while adding fragile BSS-layout
 coupling to the hot path. After #4 took the one real work-elimination in CLR,
 nothing here is worth the risk.
+
+### Hoist `eff_tm/ts_line` fill out of the loop — ✅ DONE (217 → 214)
+
+See the "Shipped gains" bullet above. When there are no windows and no
+per-scanline TM/TS HDMA, the per-scanline `eff_tm_line`/`eff_ts_line` fills are
+frame-constant, so they're done once before the loop. ~150 KB/frame removed;
+TOTAL 217 → 214 — small (near the noise floor) but a correct work-elimination
+with no downside. Windowed / TM-HDMA scenes keep the per-scanline fill.
+
+### Async-clear the per-scanline buffers via DMA — ❌ declined (analysis only)
+
+Premise check first: `CLR` does **not** clear the LCD framebuffer. The
+framebuffer is never per-frame-cleared (the compositor overwrites every pixel —
+that's why #4 worked), and the one framebuffer-bound clear (`line_out`) is
+already gone via #4. What `CLR` now zeroes is the *internal* per-scanline
+accumulators (`best_bg_gp_lm`, `obj_prio`), which must be cleared each scanline
+because BG/OBJ write them sparsely and the compositor reads every pixel.
+Triple-buffering is about output frames and does not apply here.
+
+Offloading those clears to MDMA (ping-pong: clear scanline N+1 while the CPU
+composites N) is *possible* but a poor trade:
+- **Cache coherency is the blocker.** The buffers are cacheable AXI-SRAM and
+  hot per-pixel; MDMA writes bypass the D-cache → stale reads. Fixes all hurt:
+  per-scanline `SCB_InvalidateDCache_by_Addr` (overhead + bug-prone),
+  non-cacheable buffers (slows the *hot* inner loop — likely a net loss), or
+  DTCM (clean, but DTCM is ~full — only ~1.5 KB free, need ~3 KB for ping-pong).
+- **Per-scanline MDMA setup ×240/frame** eats the ceiling; the clear must finish
+  before BG renders into that buffer, so a faster CPU just stalls.
+- **Upper bound is small:** `CLR≈3 ms` (~10%) → perfect overlap ≈ 33.3→37 fps,
+  realistically +1–2 fps after overhead, for real complexity + correctness risk.
+
+Same wall as ITCM/DTCM (the work is cheap because the buffers are already
+cache-resident). Not worth it versus frameskip / an algorithmic BG change.
+
+## Forward-looking ideas (untested, lower-priority)
+
+Per-pixel/per-scanline *work reductions* (not relocations) — the only category
+that has moved FPS on this compute-bound renderer. Measure each against the
+BGPROF baseline before committing. (Realistically these are single-digit-% at
+best; the BG compositing cost is largely irreducible — see header.)
 
 ### 6. Hoist `hflip` out of EMIT_PIXELS
 
