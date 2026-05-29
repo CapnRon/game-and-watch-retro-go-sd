@@ -27,6 +27,15 @@ uint32_t active_framebuffer;
 uint32_t frame_counter;
 uint32_t last_frequency = 60;
 
+/* --- Generic vblank-synchronized present (opt-in; used by triple-buffered
+ * cores like EarthBound) ---------------------------------------------------
+ * When a core calls lcd_present_at_vblank(addr), the LTDC reload callback
+ * programs that address at the next vblank instead of the legacy fb1/fb2
+ * toggle, and records it as the displayed buffer. Cores that use lcd_swap()
+ * are unaffected: tb_pending stays 0, so the callback takes the legacy path. */
+static volatile uint32_t tb_pending;    /* addr queued for next vblank; 0 = legacy mode */
+static volatile uint32_t tb_displayed;  /* addr the LTDC is currently scanning out */
+
 #define HAL_DAC_ENABLED(__HANDLE__, __DAC_Channel__) \
   (((__HANDLE__)->Instance->CR & (DAC_CR_EN1 << ((__DAC_Channel__) & 0x10UL))))
 
@@ -163,6 +172,14 @@ void lcd_init(SPI_HandleTypeDef *spi, LTDC_HandleTypeDef *ltdc, lcd_init_flags_t
 }
 
 void HAL_LTDC_ReloadEventCallback (LTDC_HandleTypeDef *hltdc) {
+  if (tb_pending) {
+    /* Triple-buffer present: show the queued buffer. We're in the vblank
+     * reload event, so the immediate reload inside SetAddress is tear-free. */
+    HAL_LTDC_SetAddress(hltdc, tb_pending, 0);
+    tb_displayed = tb_pending;
+    tb_pending = 0;
+    return;
+  }
   if (active_framebuffer == 0) {
     HAL_LTDC_SetAddress(hltdc, (uint32_t) fb2, 0);
   } else {
@@ -244,6 +261,24 @@ void lcd_set_buffers(uint16_t *buf1, uint16_t *buf2)
 {
   fb1 = buf1;
   fb2 = buf2;
+  /* Returning to legacy double-buffering (launcher / other cores). */
+  tb_pending = 0;
+  tb_displayed = 0;
+}
+
+/* Queue a buffer to be displayed at the next vblank, without blocking.
+ * The reload-event callback programs it tear-free during vblank. */
+void lcd_present_at_vblank(void *addr)
+{
+  tb_pending = (uint32_t)addr;
+  HAL_LTDC_Reload(&hltdc, LTDC_RELOAD_VERTICAL_BLANKING);
+}
+
+/* Address the LTDC is currently scanning out (0 until the first present
+ * latches). Used by triple-buffered cores to pick a free buffer. */
+void *lcd_get_displayed_buffer(void)
+{
+  return (void *)tb_displayed;
 }
 
 void lcd_wait_for_vblank(void)

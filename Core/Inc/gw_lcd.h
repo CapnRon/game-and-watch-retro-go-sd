@@ -43,6 +43,8 @@ void lcd_clone(void);
 void* lcd_get_active_buffer(void);
 void* lcd_get_inactive_buffer(void);
 void lcd_set_buffers(uint16_t *buf1, uint16_t *buf2);
+void lcd_present_at_vblank(void *addr);
+void *lcd_get_displayed_buffer(void);
 void lcd_wait_for_vblank(void);
 uint32_t lcd_is_swap_pending(void);
 bool lcd_sleep_while_swap_pending(void);
