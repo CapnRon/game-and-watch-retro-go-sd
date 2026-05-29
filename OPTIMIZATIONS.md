@@ -1,11 +1,20 @@
 # EarthBound PPU — optimization log & pending ideas
 
-**Current state: ~33.5 fps** (overworld), up from ~20 at the start. Per-frame
-PPU render ≈ 21.4 ms (BGPROF `TOTAL=214`, 0.1 ms units): `BG≈118` (~55%, the
-3-layer software compositing — irreducible), `CLR≈30` (~14%, *internal*
-per-scanline buffers — NOT the framebuffer, see "Async-clear" below), `SND≈6`,
-remainder = WIN/OBJ/composite/send. Source line references are to
-`external/earthbound/src/snes/ppu_render.c` unless otherwise noted.
+**Current state: ~33.5 fps and climbing** (overworld), up from ~20 at the start.
+Per-frame PPU render ≈ 17.3 ms after the BG row-plan cache + transparent-tile
+elision (BGPROF `TOTAL=173`, 0.1 ms units; was 214): `BG≈79` (was 118),
+`CLR≈30`, `SND≈5`, remainder = WIN/OBJ/composite/send. Source line references are
+to `external/earthbound/src/snes/ppu_render.c` unless otherwise noted.
+
+**BG is two halves, not one monolith.** A stub A/B split `BG` ~50/50 between
+`emit_tile_run` internals (the per-pixel decode + priority compositing — the
+genuinely irreducible 3-layer software-PPU core) and `render_bg_scanline`'s
+*column loop* (per-tile tilemap address arithmetic + `ppu.vram` reads + field
+extraction). The column-loop half had never been touched; it turned out to be
+both ~7/8 redundant across a tile row's scanlines (→ row-plan cache) **and**
+mostly transparent tiles that emit nothing (→ tile elision). Together those took
+BG 118 → 79. The remaining `emit_tile_run` compositing of the ~20% non-blank
+tiles is the wall.
 
 ## Shipped gains — the real bottleneck was vsync quantization
 
@@ -22,21 +31,103 @@ shipped wins on `earthbound`, in order:
   filled once before the loop instead of 240×. ~150 KB/frame removed; TOTAL
   217 → 214 — a small, near-noise-floor but correct work-elimination.
   Windowed / TM-HDMA scenes keep the original per-scanline fill.
+- **BG tilemap row-plan cache** (first *algorithmic* BG win — see "Row cache"
+  below): **TOTAL 214 → 195, BG 118 → 105 (−11%)**, submodule `bcb99275`. The
+  column loop recomputed an identical per-column plan on every scanline of a
+  tile row; cache it once and replay it. Removed real redundant work in the
+  half of BG nothing had touched.
+- **Elide fully-transparent tiles from the row plan** (extends the row cache):
+  **TOTAL 195 → 173, BG 105 → 79 (−25%)**, submodule `46b079fe`. ~80% of
+  overworld BG tiles are all-zero (transparent on every row); detect them once
+  at plan-build time and drop them from the plan, so they cost nothing on the
+  row's other scanlines. Output-equivalent by construction. `emit_calls` fell
+  27360 → 3776/frame.
 
 Key lesson from this work: **eliminating work beats relocating it.** Every
 attempt to move the *same* work to faster memory (ITCM/DTCM, see "Reverted")
-landed in the noise; the only post-vsync wins came from *removing* work
-(`-O3` codegen, and #4's dead memset). EB is otherwise **compute-bound** at
-280 MHz — three full-width layers composited in software with no single hotspot
-that memory-placement or cache tuning can fix. When hunting further gains, look
-for redundant/dead work, not faster homes for existing work.
+landed in the noise; every win came from *removing* work — `-O3` codegen, #4's
+dead memset, and the row-plan cache's redundant column recomputation. EB's
+compositing core is **compute-bound** at 280 MHz (three full-width layers in
+software), but "compute-bound" is not the same as "no redundant work": the row
+cache proved there was still removable work outside the per-pixel inner loop.
+When hunting further gains, look for redundant/dead work, not faster homes — and
+note that per-pixel and memory-placement micro-opts have a *perfect failure
+record* here (the M7 cache/pipeline hides them; see the reverted uniform-mask
+attempt below).
 
-**The remaining real levers are not micro-optimizations:**
+**The remaining real levers:**
 - **Frameskip.** zelda3 — the same per-scanline software-PPU architecture, also
   capped at ~30 fps — ships `ZELDA3_LIMIT_30FPS=1` (renders every other game
-  frame). Deferred so far in favor of compute headroom, but ITCM/DTCM/packing
-  experiments have now shown there is no compute headroom to find.
-- **Algorithmic PPU changes** (reduce per-pixel/per-tile work, not relocate it).
+  frame). Still the single biggest untapped lever. Open question worth settling
+  first: is EB's game logic render-coupled (i.e. running in slow-motion below
+  60 Hz), which would make frameskip a *speed fix*, not just a smoothness trade?
+- **More algorithmic PPU work.** The row cache only addressed the column-loop
+  half of BG; the per-pixel compositing half (`emit_tile_run` internals) is the
+  remaining ~50% and has no obvious single hotspot. Reductions must *remove*
+  per-pixel/per-tile work, not relocate it.
+
+## ★ Row cache: BG tilemap row-plan cache (SHIPPED, BG −11%)
+
+The first *algorithmic* win to move BG, and the first to touch the column-loop
+half. `render_bg_scanline`'s column loop (tilemap address arithmetic +
+`ppu.vram` tilemap reads + entry field extraction) ran every scanline, but
+vertical scroll is frame-constant, so the up-to-8 output scanlines that share a
+tile row read **identical** tilemap entries and produce the same per-column plan
+`{tile_num, palette, prio, flip, screen_x, run length}`. That recomputation was
+~7/8 redundant.
+
+Fix: decode the per-column plan once per tile row into `bg_row_plan[bg][]` and
+replay it for the row's other scanlines. Per-scanline pixel decode/compositing
+(`emit_tile_run`) still runs every line (it depends on the row-within-tile), so
+only the column-derivation work is saved.
+
+- **Correctness:** keyed on `(tile_row_map, scroll_x, render_width)`, invalidated
+  at frame start. A replay therefore only happens for same-frame scanlines that
+  map to the same tile row at the same scroll — exactly when the plan is provably
+  identical. 8×8 tiles only; 16×16 and bg2 HDMA distortion (per-scanline scroll)
+  fall back to the full loop. Single render context only (the cache is global);
+  `#if PPU_BG_ROW_CACHE` auto-disables when `PPU_NUM_RENDER_CONTEXTS != 1`.
+- **Measured (overworld, same scene):** BG 118 → 105, TOTAL 214 → 195.
+- **Cost:** +1.3 KB `.text`, +2 KB BSS (RAM_EMU) — the M7 cache/pipeline did
+  *not* hide this gain (unlike the relocations), because it removes a real
+  dependent-integer-op + VRAM-read chain, not a pipelined-away load.
+- **Verified** visually correct on hardware (overworld).
+
+### Extension: elide fully-transparent tiles (SHIPPED, BG −25% more)
+
+A natural follow-on, `46b079fe`. An all-zero tile graphic is palette index 0 on
+every pixel, so `emit_tile_run` skips all 8 (`if (_cidx==0) continue`) and writes
+nothing. `tile_fully_blank()` detects this once while building the row plan and
+**omits the tile from the plan** — so it isn't emitted on *any* of the tile row's
+scanlines (vs. re-paying the per-row blank-skip each time). Output-equivalent by
+construction. On the overworld ~80% of BG tiles are fully transparent, so:
+
+- **Measured:** BG 105 → 79, TOTAL 195 → 173; `emit_calls` 27360 → 3776/frame,
+  `elided` ≈ 2968/frame. Verified visually correct (overworld + battle).
+- Composes with the cache: the plan shrinks to ~5 entries/layer, so replay is
+  nearly free. The full-tile read happens only on the 1-in-8 build scanlines.
+- BGPROF gained an `elided` field.
+
+### Not pursued: fold the wide-mode temp+merge into emit (probe B)
+
+Instrumentation showed `temp_lyr=240` on the overworld = exactly **one** of the
+three layers is non-filling (rendered to a temp buffer at SNES width, then merged
+into the viewport). Folding that merge pass into `emit_tile_run` (via a screen-x
+offset) would remove one per-pixel merge pass, but it's a much smaller target than
+the elision and meaningfully more complex (priority + window mask applied during
+merge). Shelved unless every last unit is wanted.
+
+## Reverted: no-window uniform-mask fast path (measured net loss)
+
+Hoisting the per-pixel window-mask check (`tm_line[_sx] & layer_bit`) out of
+`EMIT_PIXELS` when no layer windows are active (the mask is then loop-invariant).
+On hardware: **BG 118 → 118 (zero change), TOTAL 214 → 219 (slightly worse)** —
+reverted. The mask check was never on the critical path: the not-taken branch is
+perfectly predicted and the loads hit L1 D-cache (~1 cycle), pipelining behind
+the compositing on the dual-issue M7. The +2.8 KB of `-O3`-unswitched variants
+it added cost more (I-cache) than the phantom work it removed. Same wall as
+ITCM/DTCM/AoS — confirming per-pixel inner-loop micro-opts are dead here; the row
+cache won by removing work *outside* that loop.
 
 ## Reverted: EarthBound-wide -O3
 
@@ -194,18 +285,19 @@ that has moved FPS on this compute-bound renderer. Measure each against the
 BGPROF baseline before committing. (Realistically these are single-digit-% at
 best; the BG compositing cost is largely irreducible — see header.)
 
-### 6. Hoist `hflip` out of EMIT_PIXELS
+### 6. Hoist `hflip` out of EMIT_PIXELS — ✅ ALREADY DONE BY -O3 (verified)
 
-`ppu_render.c:236` has a per-pixel `hflip ? (7 - (start_px + _i)) : ...` branch
-on a loop-invariant. `ppu_render.c` is built at `-O3`, which may already hoist
-it — check the `.lst` before adding macro complexity. If not, split EMIT_PIXELS
-into hflip/no-hflip variants (4 forms combined with HAS_SUB).
+Checked the `.lst` (objdump -dS of `ppu_render.o`): `-O3` already unswitches the
+loop-invariant `hflip` branch into forward / descending (`ldrb …,[rX,#-1]!`)
+variants. Nothing to do.
 
-### 7. Specialize `emit_tile_run` on bpp
+### 7. Specialize `emit_tile_run` on bpp — ❌ NOT WORTH IT (verified)
 
-`bpp` is a parameter (already `always_inline`'d). The compiler should
-const-propagate through inlining at `-O3`. Verify in the `.lst` before
-hand-specializing.
+`bpp` is a *runtime* arg to `render_bg_scanline`, so it can't const-fold through
+inlining. In the `.lst`, the hot path already branches to a bpp-specialized
+block; only the cold (windowed) path keeps a per-pixel `cmp #8`. Hand-
+specializing `render_bg_scanline` on bpp would only help the cold path —
+not worth the duplication.
 
 ### 8. Improve tile-row cache hash
 
@@ -215,11 +307,12 @@ multiplicative hash (`(tile_addr * 0x9E3779B1u + pixel_y) >> 24`) typically
 distributes better. Net win depends on the current hit rate (BGPROF reports
 ~66% on the overworld) — measure first.
 
-### 9. Verify sub-screen elimination when color math is off
+### 9. Verify sub-screen elimination when color math is off — ✅ CONFIRMED
 
-The `EMIT_PIXELS(HAS_SUB=0)` macro path (`ppu_render.c:258-261`) should fully
-eliminate sub-screen work when `ctx->sub_gp == NULL`. Confirm in the `.lst`
-that no spurious sub-buffer accesses survive — if they don't, nothing to do.
+The `EMIT_PIXELS(HAS_SUB=0)` path is selected when `ctx->sub_gp == NULL` and the
+`if (HAS_SUB …)` block is compiled out (structural). Confirmed in the `.lst`: the
+`HAS_SUB=0` variants emit no sub-buffer (`sub_gp`/`sub_color`) accesses. Nothing
+to do.
 
 ### 10. Verify window-mask cache hit rate
 
