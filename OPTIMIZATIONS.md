@@ -13,6 +13,12 @@ commits on `earthbound` (shipped) prove it:
 - `7fc78e11` `-O3` on `ppu_render.c` only: **28 → 30.3 fps**
 - **#4 skip `line_out` clear in wide mode** (below): **30.3 → 33.3 fps**
   (CLR 50 → 30, TOTAL 238 → 217 in 0.1 ms units).
+- **Hoist `eff_tm/ts_line` fill out of the loop** (`ppu_render_frame_ex`):
+  when there are no windows and no per-scanline TM/TS HDMA, `base_tm/base_ts`
+  are frame-constant, so the per-scanline `memset(eff_tm_line/eff_ts_line)` is
+  filled once before the loop instead of 240×. ~150 KB/frame removed; TOTAL
+  217 → 214 — a small, near-noise-floor but correct work-elimination.
+  Windowed / TM-HDMA scenes keep the original per-scanline fill.
 
 Key lesson from this work: **eliminating work beats relocating it.** Every
 attempt to move the *same* work to faster memory (ITCM/DTCM, see "Reverted")
