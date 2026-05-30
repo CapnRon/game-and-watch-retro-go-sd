@@ -4,9 +4,12 @@
 Per-frame PPU render ≈ 15.9 ms after the BG row-plan cache + transparent-tile
 elision + OBJ sprite bucketing (BGPROF `TOTAL=159`, 0.1 ms units; was 214):
 `BG≈79` (was 118), `COMP≈33`, `CLR≈30`, `SND≈9`, `OBJ≈3` (was 22), `WIN≈0`.
-With OBJ now mined out, **`COMP≈33` is the largest non-BG slice** and the next
-target. Source line references are to `external/earthbound/src/snes/ppu_render.c`
-unless otherwise noted.
+With OBJ mined out, `COMP≈33` is the largest non-BG slice — but it was
+**investigated and ruled out** (see below): `-O3` already unswitches its
+color-math/brightness invariants, and a ceiling stub proved removing the
+remaining per-pixel OBJ work yields zero (M7 hides it). The per-phase micro-opt
+vein is exhausted; the next real lever is **frameskip**. Source line references
+are to `external/earthbound/src/snes/ppu_render.c` unless otherwise noted.
 
 **BG is two halves, not one monolith.** A stub A/B split `BG` ~50/50 between
 `emit_tile_run` internals (the per-pixel decode + priority compositing — the
@@ -127,6 +130,29 @@ into the viewport). Folding that merge pass into `emit_tile_run` (via a screen-x
 offset) would remove one per-pixel merge pass, but it's a much smaller target than
 the elision and meaningfully more complex (priority + window mask applied during
 merge). Shelved unless every last unit is wanted.
+
+## Reverted: composite (COMP) per-pixel OBJ-skip — ceiling proved noise (2026-05-30)
+
+After the OBJ bucketing win, `COMP≈33` was the largest non-BG slice, so it was
+investigated (NEXT_OPTIMIZATION.md Candidate 1). Two findings, both negative:
+
+1. **`-O3` already mined the obvious part.** The `.lst`
+   (`objdump -dS build/earthbound/ppu_render.o`) shows GCC emits **5 specialized
+   comp loops**, dispatched at loop entry on `brightness==0x0F` and
+   `color_math_active`. The overworld runs the no-CM/full-brightness variant
+   where neither `blend_colors` nor the brightness multiply appears per pixel.
+   Candidate 1's "hoist the color-math/brightness invariants" is done by the
+   compiler; reimplementing it by hand only adds I-cache bloat.
+2. **Removing the remaining per-pixel OBJ work yields nothing.** Built a BG-only
+   composite fast path for sprite-free / no-window / no-CM / full-brightness
+   lines (`render_obj_scanline` returns per-line sprite presence; the line then
+   takes `line_out[x] = bg_gp>0 ? best_bg_color[x] : backdrop`, no OBJ priority
+   machinery). Real version: **COMP 33 → 33, TOTAL 159 → 158 (noise)**. A ceiling
+   stub forcing the BG-only loop on *every* eligible line (sprites vanish) still
+   measured **COMP 33** — so even the upper bound is zero. The per-pixel
+   `obj_prio` load + threshold compare were already pipelined/predicted away by
+   the M7. Same wall as the uniform-mask attempt below. **Fully reverted**
+   (working-tree only; never committed). Don't re-attempt COMP micro-opts.
 
 ## Reverted: no-window uniform-mask fast path (measured net loss)
 
