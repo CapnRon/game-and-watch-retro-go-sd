@@ -1,10 +1,12 @@
 # EarthBound PPU — optimization log & pending ideas
 
 **Current state: ~33.5 fps and climbing** (overworld), up from ~20 at the start.
-Per-frame PPU render ≈ 17.3 ms after the BG row-plan cache + transparent-tile
-elision (BGPROF `TOTAL=173`, 0.1 ms units; was 214): `BG≈79` (was 118),
-`CLR≈30`, `SND≈5`, remainder = WIN/OBJ/composite/send. Source line references are
-to `external/earthbound/src/snes/ppu_render.c` unless otherwise noted.
+Per-frame PPU render ≈ 15.9 ms after the BG row-plan cache + transparent-tile
+elision + OBJ sprite bucketing (BGPROF `TOTAL=159`, 0.1 ms units; was 214):
+`BG≈79` (was 118), `COMP≈33`, `CLR≈30`, `SND≈9`, `OBJ≈3` (was 22), `WIN≈0`.
+With OBJ now mined out, **`COMP≈33` is the largest non-BG slice** and the next
+target. Source line references are to `external/earthbound/src/snes/ppu_render.c`
+unless otherwise noted.
 
 **BG is two halves, not one monolith.** A stub A/B split `BG` ~50/50 between
 `emit_tile_run` internals (the per-pixel decode + priority compositing — the
@@ -42,6 +44,15 @@ shipped wins on `earthbound`, in order:
   at plan-build time and drop them from the plan, so they cost nothing on the
   row's other scanlines. Output-equivalent by construction. `emit_calls` fell
   27360 → 3776/frame.
+- **OBJ per-frame sprite bucketing** (third *algorithmic* redundancy win, same
+  shape as the row cache): **TOTAL 178 → 159, OBJ 22 → 3 (−86%)**, submodule
+  `5555a539`. `render_obj_scanline` rescanned all 128 OAM sprites on every
+  scanline (~28.7 k sprite-tests/frame, the vast majority rejected by
+  `row<0||row>=h`). `build_obj_buckets()` now runs once per frame, culls
+  off-screen sprites and buckets the rest by the 8-scanline band(s) they cover;
+  each scanline iterates only sprites overlapping its band. Priority (lower OAM
+  index wins) preserved by 127→0 fill + overwrite-on-emit. Output-equivalent by
+  construction. Gated `#if PPU_OBJ_BUCKET` (single render context only).
 
 Key lesson from this work: **eliminating work beats relocating it.** Every
 attempt to move the *same* work to faster memory (ITCM/DTCM, see "Reverted")
