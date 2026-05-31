@@ -99,13 +99,44 @@ void platform_video_end_frame(void)
      * at most 2 busy, one is always free — so the CPU never waits on vblank. */
     void *disp = lcd_get_displayed_buffer();
     int next = (tb_draw + 1) % 3;   /* fallback (e.g. nothing displayed yet) */
+    bool found_free = false;
     for (int i = 0; i < 3; i++) {
         if (tb_buf[i] != drawn && (void *)tb_buf[i] != disp) {
             next = i;
+            found_free = true;
             break;
         }
     }
     tb_draw = next;
+
+#ifdef PPU_PROFILE
+    /* Black-frame hunt. Two hazards that can flash a stale/half-drawn (black)
+     * buffer, plus stall detection (a long gap between presents = a frame the
+     * loop blocked on, e.g. asset/music load — correlate with audio underruns):
+     *   - found_free false: no buffer was free; the fallback may alias the
+     *     displayed or pending buffer.
+     *   - the buffer we just picked to draw into is the one being scanned out
+     *     RIGHT NOW (disp changed under us between the read above and here). */
+    {
+        if (!found_free)
+            printf("VIDEO: no free framebuffer (drawn=%p disp=%p)\n",
+                   (void *)drawn, disp);
+        if ((void *)tb_buf[tb_draw] == lcd_get_displayed_buffer())
+            printf("VIDEO: drawing into the displayed buffer (%p) — tear/black\n",
+                   (void *)tb_buf[tb_draw]);
+
+        static uint64_t last_present;
+        uint64_t t = platform_timer_ticks();
+        if (last_present) {
+            uint32_t gap_ms = (uint32_t)((t - last_present) /
+                                         (platform_timer_ticks_per_sec() / 1000));
+            if (gap_ms > 100)
+                printf("VIDEO: %lu ms since last present (stall)\n",
+                       (unsigned long)gap_ms);
+        }
+        last_present = t;
+    }
+#endif
 
 #ifdef PPU_PROFILE
     /* Confirm the vsync stall is gone: end_frame should now be ~0 (cache clean

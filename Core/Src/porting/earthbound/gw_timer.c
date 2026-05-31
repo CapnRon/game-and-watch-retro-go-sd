@@ -129,12 +129,12 @@ bool platform_timer_should_render(void)
      * reach 60 fps it pins above its skip threshold and skips rendering
      * forever (constant choppiness). Here the deadline is tracked with the
      * cycle-accurate DWT clock (platform_timer_ticks), and the cap guarantees a
-     * ~20 fps render floor — the behaviour EB's original controller had.
+     * ~30 fps render floor (at most one skip per rendered frame).
      *
      * This decides render-vs-skip ONLY. Audio pacing is fully owned by the
      * ring buffer's back-pressure (gw_audio.c) and is independent of the skip
      * decision — so no skip_frames coupling is published here. */
-    enum { MAX_CONSEC_SKIP = 2 };
+    enum { MAX_CONSEC_SKIP = 1 };
     static uint64_t deadline;
     static int consecutive_skips;
     static bool inited;

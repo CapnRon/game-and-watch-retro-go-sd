@@ -26,11 +26,17 @@
  *   a long render, and every produced frame plays exactly once in order. The
  *   ring depth provides the jitter slack the 2-half buffer lacked.
  *
- * Pacing: the game loop is paced by ring back-pressure (eb_audio_pump blocks
- * until a slot frees) instead of common_emu_sound_sync(). Because the ISR drains
- * the ring at the fixed SAI rate, blocking on a free slot phase-locks audio
- * generation to consumption — strictly better than the old half-buffer wait,
- * and it removes the skip-frame coupling entirely (see gw_timer.c).
+ * Pacing: real-time, driven by ring fill level (replaces common_emu_sound_sync,
+ * and removes the skip-frame coupling entirely — see gw_timer.c). When the ring
+ * is full the loop is keeping pace; eb_audio_pump blocks for one freed slot and
+ * produces one frame, so the APU advances at 60 Hz. When the ring is NOT full
+ * the render-bound loop has fallen below 60 Hz (heavy scene at
+ * MAX_CONSEC_SKIP=1, or recovering from a long synchronous op); the pump then
+ * refills every free slot without blocking, so the APU steps at the SAI's
+ * real-time rate. The game's visuals/logic slow under load while music keeps
+ * correct tempo, rather than the ring draining to an underrun. If the ring does
+ * empty anyway (a single op blocking the loop past the ring's depth, e.g. a
+ * music-pack load), the ISR replays the last frame — see eb_audio_dma_refill.
  *
  * Concurrency: single producer (main loop, writes head), single consumer (SAI
  * ISR, writes tail). 32-bit aligned accesses are atomic on the M7; a DMB orders
@@ -38,6 +44,7 @@
  */
 
 #include <string.h>
+#include <stdio.h>
 
 #include "platform/platform.h"
 #include "game/audio.h"
@@ -66,29 +73,38 @@ static int16_t eb_ring[EB_RING_FRAMES][EB_AUDIO_SAMPLES_PER_FRAME];
 static volatile uint16_t eb_ring_head;  /* producer (main loop) writes */
 static volatile uint16_t eb_ring_tail;  /* consumer (SAI ISR) writes */
 
+/* Diagnostic: DMA halves the ISR had to fill from a starved ring (see report
+ * in eb_audio_pump). Written by the ISR, read by the main loop. */
+static volatile uint32_t eb_underrun_frames;
+
 static inline uint16_t eb_ring_count(void)
 {
     return (uint16_t)(eb_ring_head - eb_ring_tail);
 }
 
 /* SAI Tx ISR refill: pop one frame into the just-freed DMA half. Kept tiny —
- * a single memcpy. On underrun (ring empty) emit silence; with adequate ring
- * depth this should not happen outside startup. */
+ * a single memcpy. On underrun (ring empty) replay the most recent frame
+ * instead of silence: a brief tempo hold is far less harsh than a click to
+ * zero. The producer won't overwrite the (tail-1) slot until head laps all the
+ * way around the ring, so it stays valid to replay. At startup that slot is
+ * still zero-filled BSS, i.e. silence. */
 static void eb_audio_dma_refill(int16_t *dst, uint16_t samples)
 {
     uint16_t n = (samples < EB_AUDIO_SAMPLES_PER_FRAME)
                  ? samples : EB_AUDIO_SAMPLES_PER_FRAME;
+    const int16_t *src;
 
     if (eb_ring_head == eb_ring_tail) {
-        memset(dst, 0, samples * sizeof(int16_t));
-        return;
+        eb_underrun_frames++;
+        src = eb_ring[(eb_ring_tail - 1) & EB_RING_MASK];  /* repeat last */
+    } else {
+        src = eb_ring[eb_ring_tail & EB_RING_MASK];
+        eb_ring_tail++;
     }
 
-    memcpy(dst, eb_ring[eb_ring_tail & EB_RING_MASK], n * sizeof(int16_t));
+    memcpy(dst, src, n * sizeof(int16_t));
     if (samples > n)
         memset(dst + n, 0, (samples - n) * sizeof(int16_t));
-
-    eb_ring_tail++;
 }
 
 bool platform_audio_init(void)
@@ -111,18 +127,11 @@ void platform_audio_shutdown(void)
 void platform_audio_lock(void) {}
 void platform_audio_unlock(void) {}
 
-void eb_audio_pump(void)
+/* Generate, mix, and push exactly one frame into the ring. Steps the SPC/APU
+ * by one frame of audio (audio_generate_samples runs apu_runCycles), so the
+ * caller's rate of calling this == the music's playback rate. */
+static void eb_produce_frame(void)
 {
-    /* Back-pressure: wait for a free ring slot. This is the frame loop's pacing
-     * clock — the SAI ISR frees one slot every ~16.69 ms, so blocking here locks
-     * generation to playback. The wait is bounded by one DMA half (well under
-     * the WWDG timeout); refresh the watchdog each spin in case a preceding
-     * render ran long. */
-    while (eb_ring_count() >= EB_RING_FRAMES) {
-        wdog_refresh();
-        cpumon_sleep();  /* __WFI; wakes on the SAI ISR that frees a slot */
-    }
-
     int16_t *dst = eb_ring[eb_ring_head & EB_RING_MASK];
 
     if (common_emu_sound_loop_is_muted()) {
@@ -138,8 +147,53 @@ void eb_audio_pump(void)
         }
     }
 
-    /* Publish the frame: ensure the ring writes land before the head advance
-     * the ISR observes. */
+    /* Publish: ensure the ring writes land before the head advance the ISR
+     * observes. */
     __DMB();
     eb_ring_head++;
+}
+
+void eb_audio_pump(void)
+{
+    /* Real-time-paced production. Two regimes:
+     *
+     *   Keeping up (ring full): block for one freed slot, then produce exactly
+     *   one frame. The SAI ISR frees a slot every ~16.69 ms, so this is the
+     *   frame loop's pacing clock and the APU advances at 60 Hz — correct
+     *   tempo, full double-buffer slack.
+     *
+     *   Behind (ring not full): the render-bound loop is running below 60 Hz
+     *   (heavy scene at MAX_CONSEC_SKIP=1, or recovering from a long
+     *   synchronous op like a music change). Don't block — refill every free
+     *   slot so the APU steps at the SAI's real-time rate regardless of how
+     *   slow the loop is. Net effect: the game's visuals/logic slow under load
+     *   while music keeps correct tempo, instead of the ring draining to an
+     *   underrun. The refill is bounded by ring depth, so a single pump runs
+     *   the APU for at most EB_RING_FRAMES frames (~16 ms of work) — safe under
+     *   the WWDG. Watchdog refreshed each spin in case the preceding render ran
+     *   long. */
+    while (eb_ring_count() >= EB_RING_FRAMES) {
+        wdog_refresh();
+        cpumon_sleep();  /* __WFI; wakes on the SAI ISR that frees a slot */
+    }
+
+    uint16_t want = (uint16_t)(EB_RING_FRAMES - eb_ring_count());
+    for (uint16_t i = 0; i < want; i++)
+        eb_produce_frame();
+
+#ifdef PPU_PROFILE
+    /* Throttled starvation report (~every 4 s) so heavy-scene / long-op
+     * underruns show up on `make monitor` without spamming. */
+    {
+        static uint32_t pumps, last_underruns;
+        if (++pumps >= 240) {
+            uint32_t u = eb_underrun_frames;
+            if (u != last_underruns)
+                printf("AUDIO: %lu underrun frames (+%lu in last ~4s)\n",
+                       (unsigned long)u, (unsigned long)(u - last_underruns));
+            last_underruns = u;
+            pumps = 0;
+        }
+    }
+#endif
 }
