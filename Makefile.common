@@ -985,6 +985,7 @@ C_DEFS_EARTHBOUND =  \
 -DEB_PIXEL_RGB565=1 \
 -DENABLE_AUDIO=1 \
 -DPPU_PROFILE=1 \
+-DPLATFORM_HOST_PACED_FRAMESKIP=1 \
 -DPPU_FORCE_SPEED_OPT=1 \
 -include Core/Inc/porting/earthbound/eb_alloc.h \
 
