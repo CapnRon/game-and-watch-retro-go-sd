@@ -10,6 +10,17 @@
  * Audio is pumped from platform_timer_frame_start (called at the bottom of
  * host_process_frame, every frame, including frame-skipped ones) so the
  * SAI DMA never underruns when the renderer falls behind.
+ *
+ * Frame pacing splits the two concerns: platform_timer_should_render() picks
+ * the render-skip state at the top of host_process_frame (DWT-clocked, hard
+ * skip cap — see that function for why not common_emu_frame_loop), and the loop
+ * is throttled to wall-clock by the audio ring's back-pressure rather than by
+ * sleep_until. eb_audio_pump() (gw_audio.c, run from platform_timer_frame_start)
+ * blocks until the SAI ISR frees a ring slot — once per DMA half (~16.69 ms) —
+ * so generation is phase-locked to playback and the DMA is the master clock.
+ * platform_timer_sleep_until() therefore no longer calls common_emu_sound_sync()
+ * (that would double-pace and starve the buffer). Requires
+ * PLATFORM_HOST_PACED_FRAMESKIP for the EarthBound build.
  */
 
 #include "platform/platform.h"
@@ -80,10 +91,77 @@ void platform_timer_update_fps(void)
 
 void platform_timer_sleep_until(uint64_t deadline)
 {
-    while (platform_timer_ticks() < deadline) {
-        wdog_refresh();
-    }
+    /* Frame pacing is owned by the audio ring's back-pressure: eb_audio_pump()
+     * (run from platform_timer_frame_start, immediately after this returns)
+     * blocks until the SAI ISR frees a ring slot, which happens once per DMA
+     * half (~16.69 ms). That phase-locks the loop to audio consumption, so the
+     * DMA — not the CPU clock — is the frame's master clock. We therefore do
+     * NOT call common_emu_sound_sync() here: doing so would add a second,
+     * redundant DMA-half wait per rendered frame, dropping production below
+     * consumption and starving the buffer. The upstream frame_deadline is
+     * likewise ignored (see file header). Just keep the watchdog happy. */
+    (void)deadline;
+    wdog_refresh();
 }
+
+#ifdef PLATFORM_HOST_PACED_FRAMESKIP
+bool platform_timer_should_render(void)
+{
+    /* Frame-skip + audio-pacing controller for EarthBound.
+     *
+     * EB renders well below 60 fps (~30 ms/frame on the overworld), so we keep
+     * game logic + audio running at the 60 Hz target and skip *rendering* on a
+     * frame once we have fallen a whole frame behind — capped at
+     * MAX_CONSEC_SKIP consecutive skips so a perpetually over-budget renderer
+     * still presents a frame periodically.
+     *
+     * This hook is what makes EB skip renders at all: the upstream built-in
+     * frame-skip in host_process_frame is disabled for this port (game_main.c
+     * defines MAX_FRAME_SKIP 0, so its skip branch is never taken). Without
+     * PLATFORM_HOST_PACED_FRAMESKIP, host_process_frame would render every
+     * frame at ~30 ms, dragging game logic AND audio production down to ~33 Hz
+     * — half-speed gameplay plus a starved audio ring (the SAI consumes 60
+     * frames/s but only ~33 would be produced).
+     *
+     * Why not common_emu_frame_loop(): its integrator is clocked by
+     * HAL_GetTick() (1 ms resolution — ~6% quantisation noise per ~16.7 ms
+     * frame) and has no consecutive-skip cap, so for a core that can never
+     * reach 60 fps it pins above its skip threshold and skips rendering
+     * forever (constant choppiness). Here the deadline is tracked with the
+     * cycle-accurate DWT clock (platform_timer_ticks), and the cap guarantees a
+     * ~20 fps render floor — the behaviour EB's original controller had.
+     *
+     * This decides render-vs-skip ONLY. Audio pacing is fully owned by the
+     * ring buffer's back-pressure (gw_audio.c) and is independent of the skip
+     * decision — so no skip_frames coupling is published here. */
+    enum { MAX_CONSEC_SKIP = 2 };
+    static uint64_t deadline;
+    static int consecutive_skips;
+    static bool inited;
+
+    uint64_t period = platform_timer_ticks_per_sec() / 60;
+    uint64_t now = platform_timer_ticks();
+    if (!inited) { deadline = now; inited = true; }
+
+    bool do_render;
+    if ((int64_t)(now - deadline) > (int64_t)period &&
+        consecutive_skips < MAX_CONSEC_SKIP) {
+        do_render = false;
+        consecutive_skips++;
+    } else {
+        do_render = true;
+        consecutive_skips = 0;
+    }
+
+    /* Advance the deadline by one frame; clamp runaway debt after a
+     * pause/menu/long stall so we don't burst-skip to catch up. */
+    deadline += period;
+    if ((int64_t)(now - deadline) > (int64_t)(MAX_CONSEC_SKIP * period))
+        deadline = now;
+
+    return do_render;
+}
+#endif
 
 uint64_t platform_timer_ticks(void)
 {
