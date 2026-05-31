@@ -284,13 +284,6 @@ static void run_gwenesis_emulation(void)
                                STATUS_VBLANK);
           gwenesis_vdp_status ^= STATUS_ODDFRAME;
 
-          if (hint_counter == 0) {
-            hint_pending = 1;
-            if (REG0_LINE_INTERRUPT &&
-                (gwenesis_vdp_status & STATUS_VIRQPENDING) == 0)
-              m68k_update_irq(4);
-          }
-
           /* First vblank line (=VINT), with optional delay before IRQ. */
           scan_line = (int)screen_height;
           if (!skip_first_vint) {
@@ -312,25 +305,17 @@ static void run_gwenesis_emulation(void)
             system_clock += VDP_CYCLES_PER_LINE;
           }
 
-          /* Last vblank line: reload H-INT counter, clear VBLANK flag.
-           * Also fire H-INT here when the counter underflows (clownmdemu
-           * "scanline -1") so line-0 raster handlers run before render_line(0). */
+          /* Last vblank line: reload H-INT counter, clear VBLANK (GPGX). */
           scan_line = (int)lines_per_frame - 1;
           hint_counter = (int)REG10_LINE_COUNTER;
           gwenesis_vdp_status &= (unsigned short)~STATUS_VBLANK;
-          if (--hint_counter < 0) {
-            hint_pending = 1;
-            if (REG0_LINE_INTERRUPT &&
-                (gwenesis_vdp_status & STATUS_VIRQPENDING) == 0)
-              m68k_update_irq(4);
-            hint_counter = (int)REG10_LINE_COUNTER;
-          }
           gwenesis_run_cpus_to(system_clock + VDP_CYCLES_PER_LINE);
           system_clock += VDP_CYCLES_PER_LINE;
 
           /* Active display (H-INT before CPU run for each line). */
           for (line = 0; line < (int)screen_height; line++) {
             scan_line = line;
+            gwenesis_vdp_latch_line_scroll(line);
             if (hint_counter == 0) {
               hint_counter = (int)REG10_LINE_COUNTER;
               hint_pending = 1;

@@ -678,7 +678,7 @@ int app_main_gwenesis(uint8_t load_state, uint8_t start_paused, int8_t save_slot
     gwenesis_vdp_set_buffer(&screen[0]);
     extern unsigned char gwenesis_vdp_regs[0x20];
     extern unsigned short gwenesis_vdp_status;
-    extern unsigned int screen_width, screen_height;
+    extern int screen_width, screen_height;
     extern int hint_pending;
     volatile unsigned int current_frame;
 
@@ -789,13 +789,6 @@ int app_main_gwenesis(uint8_t load_state, uint8_t start_paused, int8_t save_slot
                            STATUS_VBLANK);
       gwenesis_vdp_status ^= STATUS_ODDFRAME;
 
-      if (hint_counter == 0) {
-        hint_pending = 1;
-        if (REG0_LINE_INTERRUPT &&
-            (gwenesis_vdp_status & STATUS_VIRQPENDING) == 0)
-          m68k_update_irq(4);
-      }
-
       /* First vblank line (=VINT), with optional delay before IRQ. */
       scan_line = screen_height;
       if (!skip_first_vint) {
@@ -817,25 +810,17 @@ int app_main_gwenesis(uint8_t load_state, uint8_t start_paused, int8_t save_slot
         system_clock += VDP_CYCLES_PER_LINE;
       }
 
-      /* Last vblank line: reload H-INT counter, clear VBLANK flag.
-       * Also fire H-INT here when the counter underflows (clownmdemu
-       * "scanline -1") so line-0 raster handlers run before render_line(0). */
+      /* Last vblank line: reload H-INT counter, clear VBLANK (GPGX). */
       scan_line = lines_per_frame - 1;
       hint_counter = (int)REG10_LINE_COUNTER;
       gwenesis_vdp_status &= (unsigned short)~STATUS_VBLANK;
-      if (--hint_counter < 0) {
-        hint_pending = 1;
-        if (REG0_LINE_INTERRUPT &&
-            (gwenesis_vdp_status & STATUS_VIRQPENDING) == 0)
-          m68k_update_irq(4);
-        hint_counter = (int)REG10_LINE_COUNTER;
-      }
       gwenesis_run_cpus_to(system_clock + VDP_CYCLES_PER_LINE);
       system_clock += VDP_CYCLES_PER_LINE;
 
       /* Active display (H-INT before CPU run for each line). */
       for (line = 0; line < (int)screen_height; line++) {
         scan_line = (unsigned int)line;
+        gwenesis_vdp_latch_line_scroll(line);
         if (hint_counter == 0) {
           hint_counter = (int)REG10_LINE_COUNTER;
           hint_pending = 1;
