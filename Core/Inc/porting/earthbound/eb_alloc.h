@@ -8,6 +8,12 @@
  * bump allocator instead of newlib's 85 KB DTCM heap, which the launcher,
  * FatFs, and stdio already share.
  *
+ * The ~70 KB (incl. the 64 KB SPC ARAM) MUST stay in cached RAM_EMU: the
+ * SPC700/DSP touch ARAM nearly every emulated cycle, and an experiment moving
+ * it to uncached AHB/D2 SRAM ran at ~266 ms/frame. So static .bss growth in
+ * RAM_EMU is bounded by the linker (see __EARTHBOUND_MIN_RAM_HEAP__ in
+ * STM32H7B0VBTx_SDCARD.ld) to keep room for this heap.
+ *
  * EB src/ outside lakesnes does not call malloc/free directly (verified),
  * so the override is effectively scoped to those four files.
  *

@@ -74,6 +74,13 @@ __FLASH_LENGTH__    = 256K; /* Bank 1 */
 __FLASH2_LENGTH__   = 256K; /* Bank 2 */
 __RAM_FCEUMM_MAPPER_LENGTH__ = 48K; /* Current FCEUMM mapper code */
 
+/* Minimum RAM_EMU left free, after EarthBound's static .bss, for its runtime
+ * bump heap. The lakesnes audio engine ram_malloc()s ~70 KB at audio_init
+ * (Apu + 64 KB SPC ARAM + Spc/Dsp/statehandler — see eb_alloc.h) plus a little
+ * flash-cache metadata, all from RAM_EMU starting at ram_start =
+ * _OVERLAY_EARTHBOUND_BSS_END. Asserted at the bottom of this script. */
+__EARTHBOUND_MIN_RAM_HEAP__ = 74 * 1024; /* ~70 KB audio + margin; see RAM.md */
+
 /* Usefull only for round robin flash allocator */
 __EXTFLASH_BASE__ = 0x90000000;  /* Beginning of addressable extflash addresses */
 __EXTFLASH_START__ = __EXTFLASH_BASE__;  /* Beginning of where we're going to store emulator and rom data */
@@ -902,3 +909,22 @@ INCLUDE build/fceumm_mappers.ld
 
   .ARM.attributes 0 : { *(.ARM.attributes) }
 }
+
+/* EarthBound runtime-heap reserve check.
+ *
+ * The plain "EARTHBOUND BSS overflow" ASSERT inside .overlay_earthbound_bss
+ * only proves the STATIC .bss fits below __RAM_EMU_END__. It cannot see the
+ * ~70 KB the lakesnes audio engine bump-allocates from RAM_EMU at runtime
+ * (Apu + 64 KB SPC ARAM, via ram_malloc starting at ram_start =
+ * _OVERLAY_EARTHBOUND_BSS_END). That blind spot is exactly how commit 25a1c873
+ * (PPU persist cache, +80 KB .bss) linked green yet starved audio_init to a
+ * NULL malloc on hardware. The ARAM must stay in cached RAM_EMU — an
+ * experiment moving it to uncached AHB/D2 SRAM ran at ~266 ms/frame — so the
+ * only fix is to keep static .bss small enough. This check fails the LINK if
+ * the post-.bss headroom drops below __EARTHBOUND_MIN_RAM_HEAP__.
+ *
+ * Placed at top level (not inside the output section) so it sees the FINAL
+ * _OVERLAY_EARTHBOUND_BSS_END — an in-section ASSERT can evaluate the location
+ * counter before it is final and silently pass. */
+ASSERT(_OVERLAY_EARTHBOUND_BSS_END + __EARTHBOUND_MIN_RAM_HEAP__ <= __RAM_EMU_END__,
+       "EARTHBOUND: static .bss leaves < __EARTHBOUND_MIN_RAM_HEAP__ (74 KB) of RAM_EMU for the runtime audio heap (lakesnes Apu + 64 KB SPC ARAM ~70 KB starves to NULL). Shrink static state: disable PPU_PERSIST_DECODE or lower PERSIST_BITS. See RAM.md.")
