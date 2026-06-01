@@ -19,6 +19,14 @@
  * becomes the true render rate (~28fps), and real-time pacing is still handled
  * by platform_timer_sleep_until() in host_process_frame().
  *
+ * The one case end_frame does block is when a frame finishes within the same
+ * refresh as the previous present (render < ~16.7ms, i.e. already faster than
+ * the panel): it waits for the prior swap to latch before queueing the next,
+ * so the pipeline never holds two un-latched presents. That keeps presents
+ * strictly one-per-refresh and FIFO-ordered, which is what makes the
+ * round-robin buffer selection in end_frame race-free (an earlier version that
+ * skipped this wait could orphan a pending buffer and flash it mid-draw).
+ *
  * Buffer cacheability: fb1/fb2 are the launcher's buffers in the non-cacheable
  * RAM_UC region (LTDC-coherent with no maintenance). The third buffer lives in
  * EB's overlay BSS (RAM_EMU, cacheable), so we flush its cache lines before
@@ -91,36 +99,35 @@ void platform_video_end_frame(void)
         SCB_CleanDCache_by_Addr((uint32_t *)eb_fb3, sizeof(eb_fb3));
     }
 
-    /* Queue this buffer for a tear-free swap at the next vblank — non-blocking. */
+    /* Don't queue a new present while the previous one is still waiting for its
+     * vblank latch. When two frames complete within a single 60Hz refresh
+     * (light scenes, menus, title screens — render < ~16.7ms), the second
+     * lcd_present_at_vblank() would overwrite the still-pending address and
+     * orphan a buffer; the round-robin below could then hand that buffer back
+     * as the next draw target right as the vblank scans it out — a 1-frame
+     * tear/black flash. Waiting here bounds the pipeline to exactly one present
+     * per refresh in FIFO order, which is what makes the rotation below
+     * provably race-free. It only blocks when we're already ahead of the
+     * refresh, so the ~25fps overworld path — where the prior present latched a
+     * full refresh ago — never waits. */
+    lcd_sleep_while_swap_pending();
+
+    /* Queue this fully-drawn buffer for a tear-free swap at the next vblank. */
     lcd_present_at_vblank(drawn);
 
-    /* Choose the next draw buffer: any buffer that is neither the one we just
-     * queued (now pending) nor the one currently displayed. With 3 buffers and
-     * at most 2 busy, one is always free — so the CPU never waits on vblank. */
-    void *disp = lcd_get_displayed_buffer();
-    int next = (tb_draw + 1) % 3;   /* fallback (e.g. nothing displayed yet) */
-    bool found_free = false;
-    for (int i = 0; i < 3; i++) {
-        if (tb_buf[i] != drawn && (void *)tb_buf[i] != disp) {
-            next = i;
-            found_free = true;
-            break;
-        }
-    }
-    tb_draw = next;
+    /* Next draw target: strict round-robin. With at most one present pending
+     * (guaranteed by the wait above) the buffers are in a known state — buf
+     * [tb_draw] is now pending and buf[tb_draw-1] is displayed — so
+     * buf[(tb_draw+1)%3] is always the third, free buffer. No read of the live
+     * displayed address, so no select-vs-vblank race. */
+    tb_draw = (tb_draw + 1) % 3;
 
 #ifdef PPU_PROFILE
-    /* Black-frame hunt. Two hazards that can flash a stale/half-drawn (black)
-     * buffer, plus stall detection (a long gap between presents = a frame the
-     * loop blocked on, e.g. asset/music load — correlate with audio underruns):
-     *   - found_free false: no buffer was free; the fallback may alias the
-     *     displayed or pending buffer.
-     *   - the buffer we just picked to draw into is the one being scanned out
-     *     RIGHT NOW (disp changed under us between the read above and here). */
+    /* Black-frame hunt + stall detection (a long gap between presents = a frame
+     * the loop blocked on, e.g. asset/music load — correlate with audio
+     * underruns). With the FIFO-bounded rotation above the displayed-buffer
+     * collision check should never fire; it stays as a regression tripwire. */
     {
-        if (!found_free)
-            printf("VIDEO: no free framebuffer (drawn=%p disp=%p)\n",
-                   (void *)drawn, disp);
         if ((void *)tb_buf[tb_draw] == lcd_get_displayed_buffer())
             printf("VIDEO: drawing into the displayed buffer (%p) — tear/black\n",
                    (void *)tb_buf[tb_draw]);
