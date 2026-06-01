@@ -649,8 +649,15 @@ static uint8_t box_height(uint8_t n) {
 }
 
 void common_ingame_overlay(void) {
+    common_ingame_overlay_to(lcd_get_active_buffer());
+}
+
+/* Same as common_ingame_overlay(), but draws into an explicit framebuffer
+ * instead of the launcher's double-buffered lcd_get_active_buffer(). Cores that
+ * manage their own framebuffers (e.g. EarthBound's triple-buffer scheme) must
+ * use this so the overlay lands on the frame they're actually presenting. */
+void common_ingame_overlay_to(pixel_t *fb) {
     rg_app_desc_t *app = odroid_system_get_app();
-    pixel_t *fb = lcd_get_active_buffer();
     int8_t level;
     uint8_t bh;
     uint8_t turbo_key;

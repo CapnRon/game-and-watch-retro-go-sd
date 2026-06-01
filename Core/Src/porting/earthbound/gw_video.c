@@ -39,6 +39,7 @@
 
 #include "platform/platform.h"
 #include "gw_lcd.h"
+#include "common.h"
 
 /* Third framebuffer — cacheable, in EB's overlay BSS (RAM_EMU). 32-byte
  * aligned and a whole number of cache lines so SCB_CleanDCache_by_Addr cleans
@@ -91,6 +92,14 @@ void platform_video_end_frame(void)
     uint64_t ef_t0 = platform_timer_ticks();
 #endif
     uint16_t *drawn = tb_buf[tb_draw];
+
+    /* Draw the in-game overlay (volume/brightness bars, save/load icon, …) onto
+     * the buffer we're about to present. EB manages its own triple-buffer and
+     * never updates the launcher's active_framebuffer, so the plain
+     * common_ingame_overlay() would draw into the wrong buffer — pass the actual
+     * draw target explicitly. Must run before the cache flush below so the
+     * overlay pixels are flushed too. */
+    common_ingame_overlay_to((pixel_t *)drawn);
 
     /* eb_fb3 is cacheable — flush the scanlines we just wrote so the LTDC,
      * which reads RAM directly, sees them. fb1/fb2 are non-cacheable (RAM_UC),
