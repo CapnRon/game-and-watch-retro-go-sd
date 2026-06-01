@@ -65,6 +65,17 @@ extern void wdog_refresh(void);
 #define EB_RING_FRAMES 8
 #define EB_RING_MASK   (EB_RING_FRAMES - 1)
 
+/* Post-mix loudness boost, Q8 fixed point (256 = unity, 512 = 2.0x, +6 dB).
+ *
+ * The lakesnes DSP reproduces EarthBound's native mix faithfully, and EB's own
+ * sound driver leaves a lot of headroom below full-scale int16 — so unmodified
+ * output is noticeably quieter than the other G&W cores (whose source material
+ * is hotter). This applies a fixed make-up gain after the volume scaling, with
+ * saturating clamp so loud SFX clip cleanly to int16 instead of wrapping.
+ * 384 (1.5x) is conservative; 512 (2x) is punchier with occasional soft
+ * clipping on the loudest passages. */
+#define EB_AUDIO_GAIN_Q8 512
+
 /* Stereo scratch — audio_generate_samples writes L,R,L,R interleaved. */
 static int16_t eb_stereo_scratch[EB_AUDIO_SAMPLES_PER_FRAME * 2];
 
@@ -143,7 +154,13 @@ static void eb_produce_frame(void)
         for (uint16_t i = 0; i < EB_AUDIO_SAMPLES_PER_FRAME; i++) {
             int32_t mono = ((int32_t)eb_stereo_scratch[i * 2] +
                             (int32_t)eb_stereo_scratch[i * 2 + 1]) >> 1;
-            dst[i] = (int16_t)((mono * factor) >> 8);
+            /* Volume scale, then make-up gain. Split shifts keep the product in
+             * int32: mono*factor ≤ 32767*255 ≈ 8.4M, then >>8 before the gain
+             * multiply so (<=32767)*512 stays well within range. */
+            int32_t v = ((mono * factor) >> 8) * EB_AUDIO_GAIN_Q8 >> 8;
+            if (v > 32767) v = 32767;
+            else if (v < -32768) v = -32768;
+            dst[i] = (int16_t)v;
         }
     }
 
