@@ -38,6 +38,7 @@
 #include <stdio.h>
 
 #include "platform/platform.h"
+#include "snes/ppu.h"
 #include "gw_lcd.h"
 #include "common.h"
 
@@ -180,3 +181,29 @@ void platform_video_set_vsync(bool enabled)
  * (the upstream single-core default). It calls begin_frame, ppu_render_frame
  * with platform_video_send_scanline as the scanline callback, and end_frame.
  * The G&W is single-core so we use that default verbatim. */
+
+/* Scanline sink that writes into the launcher's *active* framebuffer rather
+ * than EB's private triple-buffer rotation. fb1/fb2 are non-cacheable (RAM_UC),
+ * so no cache maintenance is needed after the copy. */
+static void eb_scanline_to_active(int y, const pixel_t *pixels)
+{
+    if (y < 0 || y >= EB_VIEWPORT_HEIGHT) {
+        return;
+    }
+    uint16_t *fb = (uint16_t *)lcd_get_active_buffer();
+    memcpy(&fb[y * GW_LCD_WIDTH], pixels, EB_VIEWPORT_WIDTH * sizeof(pixel_t));
+}
+
+/* Re-render the current PPU frame into the launcher's active framebuffer, for
+ * the retro-go pause-menu background. The overlay code clears the active buffer,
+ * calls this via the repaint hook, then darkens it and draws the dialog on top
+ * (see odroid_overlay.c). This mirrors zelda3's DrawPpuFrame repaint: EB's own
+ * end_frame presents through a private triple-buffer and never touches the
+ * launcher's active buffer, so without an on-demand re-render the menu would
+ * show the just-cleared black background. The game loop is frozen inside the
+ * modal menu so the PPU state is stable, and ppu_render_frame only reads it —
+ * safe to call on every menu redraw. */
+void eb_video_repaint_active(void)
+{
+    ppu_render_frame(eb_scanline_to_active);
+}

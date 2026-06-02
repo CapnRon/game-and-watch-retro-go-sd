@@ -53,11 +53,12 @@ static odroid_dialog_choice_t eb_game_options[] = {
     ODROID_DIALOG_CHOICE_LAST,
 };
 
-/* Repaint hook for the pause menu's background. EB doesn't expose a "render
- * the current PPU state on demand" API the way zelda3's DrawPpuFrame does,
- * so menu backgrounds stay as whatever was last in the LCD buffer. The next
- * platform_video_send_scanline pass after menu dismissal repaints the game. */
-static void eb_repaint(void) {}
+/* Repaint hook for the pause menu's background: re-render the current (frozen)
+ * PPU frame into the launcher's active framebuffer so the menu's darken + dialog
+ * land over the live game rather than a black background. Implemented in
+ * gw_video.c, which owns the framebuffer/scanline plumbing. */
+extern void eb_video_repaint_active(void);
+static void eb_repaint(void) { eb_video_repaint_active(); }
 
 bool platform_input_init(void)
 {
