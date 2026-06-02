@@ -976,6 +976,10 @@ $(eval $(foreach obj,$(SMW_C_SOURCES),$(call smw_obj_prereq_gen,$(obj))))
 # VIEWPORT_{WIDTH,HEIGHT}=320x240 makes the PPU renderer pad each scanline
 # out to the G&W LCD's native resolution; SNES content stays 256x224 centered,
 # margins filled by the renderer (BG fill color / black during force blank).
+# To re-enable PPU/BGPROF/audio/video diagnostics, add -DPPU_PROFILE=1 to the
+# list below. It's left off for max performance (per-scanline timer reads +
+# periodic printf add measurable overhead); all instrumentation is gated behind
+# #ifdef PPU_PROFILE in ppu_render.c, gw_video.c, gw_audio.c, game_main.c.
 C_DEFS_EARTHBOUND =  \
 -DEB_EMBEDDED=1 \
 -DEB_NORELOC_REQUIRED=1 \
@@ -985,7 +989,6 @@ C_DEFS_EARTHBOUND =  \
 -DEB_VIEWPORT_HEIGHT=240 \
 -DEB_PIXEL_RGB565=1 \
 -DENABLE_AUDIO=1 \
--DPPU_PROFILE=1 \
 -DPLATFORM_HOST_PACED_FRAMESKIP=1 \
 -DPPU_FORCE_SPEED_OPT=1 \
 -include Core/Inc/porting/earthbound/eb_alloc.h \
