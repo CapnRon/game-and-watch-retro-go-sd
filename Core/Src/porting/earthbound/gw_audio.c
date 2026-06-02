@@ -105,6 +105,19 @@ static void eb_audio_dma_refill(int16_t *dst, uint16_t samples)
                  ? samples : EB_AUDIO_SAMPLES_PER_FRAME;
     const int16_t *src;
 
+    /* Honor the global mute, set by odroid_audio_mute() when the retro-go
+     * overlay/menu opens (and for volume/brightness chords). Standard ports go
+     * silent here for free: the menu zeroes the DMA buffer and, lacking a
+     * refill callback, it stays zeroed. EB *does* refill, so without this check
+     * the ISR keeps draining the ring and then drones the last frame on
+     * underrun while the menu is up. The producer (eb_audio_pump) is frozen in
+     * the modal menu, so the ring is left intact and playback resumes exactly
+     * where it paused once unmuted. */
+    if (audio_mute) {
+        memset(dst, 0, samples * sizeof(int16_t));
+        return;
+    }
+
     if (eb_ring_head == eb_ring_tail) {
         eb_underrun_frames++;
         src = eb_ring[(eb_ring_tail - 1) & EB_RING_MASK];  /* repeat last */
