@@ -148,6 +148,28 @@ void platform_audio_shutdown(void)
     audio_shutdown();
 }
 
+/* Re-arm SAI DMA playback after a STANDBY-hibernation resume WITHOUT touching
+ * the lakesnes APU/DSP. The full platform_audio_init() calls audio_init(),
+ * which re-inits and resets the SPC700/DSP engine — that would discard the
+ * restored music state and drop to silence until the next area change. On
+ * resume the APU struct (RAM_EMU) is already restored, so we only need to:
+ *   - reset the decoupling ring to empty (the AHB DMA buffer is fresh after a
+ *     cold boot; eb_audio_pump refills from the preserved APU on the next
+ *     frame),
+ *   - re-attach the ISR refill callback and start the SAI DMA,
+ *   - re-enable the speaker.
+ * odroid_audio_init() (SAI hardware setup) was already re-run this boot by
+ * odroid_system_init() in app_main_earthbound before the restore branch. */
+void platform_audio_rearm(void)
+{
+    eb_ring_head = 0;
+    eb_ring_tail = 0;
+    audio_set_dma_refill_callback(eb_audio_dma_refill);
+    audio_start_playing(EB_AUDIO_SAMPLES_PER_FRAME);
+    HAL_GPIO_WritePin(GPIO_Speaker_enable_GPIO_Port, GPIO_Speaker_enable_Pin,
+                      GPIO_PIN_SET);
+}
+
 void platform_audio_lock(void) {}
 void platform_audio_unlock(void) {}
 

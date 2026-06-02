@@ -45,6 +45,20 @@ static uint32_t last_fps_tick;
 static uint32_t last_cyc;
 static uint64_t cyc_high;
 
+#ifdef PLATFORM_HOST_PACED_FRAMESKIP
+/* Frame-skip controller state (platform_timer_should_render), file-scope so
+ * platform_timer_init() can reset it. This is CRITICAL after a STANDBY
+ * hibernation resume: these statics live in RAM_EMU and are restored from the
+ * snapshot with a stale (pre-sleep) deadline, while the hardware DWT->CYCCNT —
+ * and platform_timer_ticks()'s cyc_high — restart near zero on the cold boot.
+ * If they aren't reset, (now - skip_deadline) stays hugely negative and the
+ * skip branch never fires, so the renderer draws every frame and game
+ * logic/audio drop to ~half speed (the exact symptom frame-skip prevents). */
+static uint64_t skip_deadline;
+static int      skip_consecutive;
+static bool     skip_inited;
+#endif
+
 bool platform_timer_init(void)
 {
     period_acc = 0;
@@ -52,6 +66,12 @@ bool platform_timer_init(void)
     common_emu_enable_dwt_cycles();
     last_cyc = DWT->CYCCNT;
     cyc_high = 0;
+#ifdef PLATFORM_HOST_PACED_FRAMESKIP
+    /* Re-baseline the skip controller against the freshly-reset clock above. */
+    skip_deadline = 0;
+    skip_consecutive = 0;
+    skip_inited = false;
+#endif
     return true;
 }
 
@@ -135,29 +155,27 @@ bool platform_timer_should_render(void)
      * ring buffer's back-pressure (gw_audio.c) and is independent of the skip
      * decision — so no skip_frames coupling is published here. */
     enum { MAX_CONSEC_SKIP = 1 };
-    static uint64_t deadline;
-    static int consecutive_skips;
-    static bool inited;
-
+    /* State is file-scope (skip_*) so platform_timer_init() can reset it across
+     * a hibernation resume — see the declaration comment above. */
     uint64_t period = platform_timer_ticks_per_sec() / 60;
     uint64_t now = platform_timer_ticks();
-    if (!inited) { deadline = now; inited = true; }
+    if (!skip_inited) { skip_deadline = now; skip_inited = true; }
 
     bool do_render;
-    if ((int64_t)(now - deadline) > (int64_t)period &&
-        consecutive_skips < MAX_CONSEC_SKIP) {
+    if ((int64_t)(now - skip_deadline) > (int64_t)period &&
+        skip_consecutive < MAX_CONSEC_SKIP) {
         do_render = false;
-        consecutive_skips++;
+        skip_consecutive++;
     } else {
         do_render = true;
-        consecutive_skips = 0;
+        skip_consecutive = 0;
     }
 
     /* Advance the deadline by one frame; clamp runaway debt after a
      * pause/menu/long stall so we don't burst-skip to catch up. */
-    deadline += period;
-    if ((int64_t)(now - deadline) > (int64_t)(MAX_CONSEC_SKIP * period))
-        deadline = now;
+    skip_deadline += period;
+    if ((int64_t)(now - skip_deadline) > (int64_t)(MAX_CONSEC_SKIP * period))
+        skip_deadline = now;
 
     return do_render;
 }

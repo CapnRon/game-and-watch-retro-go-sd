@@ -32,6 +32,7 @@
 #include "rom_manager.h"
 #include "appid.h"
 
+#include "gw_eb_hibernate.h"
 #include "main_earthbound.h"
 
 #pragma GCC optimize("Ofast")
@@ -162,9 +163,21 @@ int app_main_earthbound(uint8_t load_state, uint8_t start_paused, int8_t save_sl
      * location of the rodata blob. */
     PatchCodeRodataOffset(eb_rodata, eb_rodata_length);
 
+    /* Remember this session's rodata runtime location so a hibernation snapshot
+     * can re-anchor its .noreloc pointers on the (cold-boot) restore. */
+    eb_hibernate_set_rodata(eb_rodata, eb_rodata_length);
+
     odroid_system_init(APPID_EARTHBOUND, EB_AUDIO_SAMPLE_RATE);
     odroid_system_emu_init(&eb_LoadState, &eb_SaveState, &Screenshot,
                            NULL, NULL, &eb_SramSave);
+
+    /* If we were launched to resume a STANDBY hibernation, overwrite the just-
+     * loaded RAM_EMU with the snapshot and longjmp straight back into the saved
+     * game frame — earthbound_main() is never reached on that path. On any
+     * failure (missing/corrupt/wrong-build snapshot) this returns and we fall
+     * through to a normal fresh start. */
+    if (eb_hibernate_pending())
+        eb_hibernate_restore(eb_rodata, eb_rodata_length);
 
     /* Hand off to upstream — earthbound_main() runs the game loop forever. */
     earthbound_main();

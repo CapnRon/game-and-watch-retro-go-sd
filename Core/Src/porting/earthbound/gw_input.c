@@ -34,6 +34,7 @@
 #include "common.h"
 #include "odroid_input.h"
 #include "odroid_overlay.h"
+#include "gw_eb_hibernate.h"
 
 /* Defined in main_earthbound.c; populated by us each frame. */
 extern odroid_gamepad_state_t eb_joystick;
@@ -74,6 +75,17 @@ void platform_input_shutdown(void) {}
 void platform_input_poll(void)
 {
     odroid_input_read_gamepad(&eb_joystick);
+
+    /* Standalone POWER → STANDBY hibernation. Intercept it here, BEFORE
+     * common_emu_input_loop, and consume the bit so the common layer's own
+     * (no-op-for-EB) power/sleep path doesn't also fire. The actual snapshot is
+     * taken at the next frame boundary in wait_for_vblank(), where the stack
+     * holds only game frames. POWER+PAUSE/SET stays with the common layer. */
+    if (eb_joystick.values[ODROID_INPUT_POWER] &&
+        !eb_joystick.values[ODROID_INPUT_VOLUME]) {
+        hibernate_requested = true;
+        eb_joystick.values[ODROID_INPUT_POWER] = 0;
+    }
 
     /* Must run BEFORE the PAD_* translation: when a PAUSE/SET chord fires,
      * common_emu_input_loop memsets the joystick to 0 to keep the consumed
@@ -116,6 +128,16 @@ uint16_t platform_input_get_aux(void)
 
 bool platform_input_quit_requested(void)
 {
+    /* STANDBY hibernation is taken here rather than via an edit to upstream's
+     * wait_for_vblank(): this port-specific quit hook is already polled at every
+     * frame boundary (and from the deep battle/text/menu loops that call it
+     * directly), which is exactly where we want a quiescent snapshot point.
+     * platform_input_poll() sets the flag when POWER is pressed; eb_hibernate()
+     * snapshots RAM to SD and enters STANDBY (never returns), or returns here on
+     * the resume/failure path with the flag already cleared. */
+    if (hibernate_requested)
+        eb_hibernate();
+
     return quit_requested;
 }
 

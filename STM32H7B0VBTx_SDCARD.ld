@@ -143,6 +143,20 @@ SECTIONS
     __itcram_end__ = .;
   } > ITCMRAM
 
+  /* Scratch stack for EarthBound STANDBY-hibernation restore. The restore
+     routine memcpy's the saved DTCM stack image back over [saved_SP, _estack),
+     so it must run on a stack OUTSIDE DTCM. ITCM is empty in this build and is
+     never part of the hibernation snapshot, so a tiny stack here is safe.
+     8-byte aligned (AAPCS). See Core/Src/gw_eb_hibernate.c. */
+  ._eb_hib_stack (NOLOAD) :
+  {
+    . = ALIGN(8);
+    __eb_hib_stack_bottom__ = .;
+    . = . + 4K;
+    . = ALIGN(8);
+    __eb_hib_stack_top__ = .;
+  } > ITCMRAM
+
   /* Uncached and unbuffered memory for the LCD framebuffers */
   ._ram_uc (NOLOAD) :
   {

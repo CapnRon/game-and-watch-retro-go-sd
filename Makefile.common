@@ -249,6 +249,7 @@ C_SOURCES += Core/src/gw_flash_alloc.c
 C_SOURCES += Core/Src/gw_sdcard.c
 C_SOURCES += Core/Src/gw_timer.c
 C_SOURCES += Core/src/softspi.c
+C_SOURCES += Core/Src/gw_eb_hibernate.c
 C_DEFS += -DGNW_DISABLE_COMPRESSION
 EXTFLASH_TOTAL_LENGTH = 0
 endif
