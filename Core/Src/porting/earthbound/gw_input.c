@@ -74,6 +74,23 @@ void platform_input_shutdown(void) {}
 
 void platform_input_poll(void)
 {
+    /* Quiescent resume anchor for retro-go savestates. The pause-menu save/load
+     * hooks fire from deep inside common_emu_input_loop() below — but a restored
+     * savestate must resume into the game loop, not back into the menu. So we
+     * record the restore context HERE, above the menu stack, every frame. On a
+     * loaded-state cold boot the restore longjmps back to this setjmp; we just
+     * return into host_process_frame(), which runs the resumed frame. (The
+     * captured stack region [SP, _estack) is the game's call chain; the menu it
+     * later descends into lives at lower addresses and is never part of it.) */
+    if (setjmp(*eb_savestate_frame_jb()) != 0) {
+        return;
+    }
+    {
+        uint32_t sp;
+        __asm volatile("mov %0, sp" : "=r"(sp));
+        eb_savestate_arm_frame(sp & ~0x7u);
+    }
+
     odroid_input_read_gamepad(&eb_joystick);
 
     /* Standalone POWER → STANDBY hibernation. Intercept it here, BEFORE

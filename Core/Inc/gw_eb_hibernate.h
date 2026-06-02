@@ -27,6 +27,7 @@ extern "C" {
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <setjmp.h>
 
 /* Set by the input layer when POWER is pressed; consumed by the EB loop. */
 extern volatile bool hibernate_requested;
@@ -51,6 +52,40 @@ void eb_hibernate_restore(uint8_t *eb_rodata, uint32_t eb_rodata_len);
 /* Record THIS session's cached-rodata address/length so the save side can stamp
  * them into the snapshot. Called from app_main_earthbound. */
 void eb_hibernate_set_rodata(uint8_t *eb_rodata, uint32_t eb_rodata_len);
+
+/* ---- retro-go savestate slots ----
+ *
+ * A savestate is the SAME RAM_EMU + C-stack core-dump as sleep/resume, just
+ * written to the retro-go slot path instead of the .hib file (a native port has
+ * no data-only state). The only wrinkle: the retro-go pause menu calls the
+ * save/load hooks from deep inside common_emu_input_loop(), below the frame
+ * boundary, so a snapshot taken there must resume into the game loop rather than
+ * back into the menu. We solve that with a per-frame "resume anchor" captured
+ * above the menu stack. */
+
+/* Per-frame quiescent resume anchor. platform_input_poll() MUST do, at its very
+ * top (above the pause-menu stack it can later descend into):
+ *     if (setjmp(*eb_savestate_frame_jb()) != 0) return;   // resumed
+ *     eb_savestate_arm_frame(<current SP>);
+ * so a savestate taken from the menu resumes cleanly into host_process_frame(). */
+jmp_buf *eb_savestate_frame_jb(void);
+void eb_savestate_arm_frame(uint32_t sp);
+
+/* Save the running game to `path` (a retro-go slot/temp file). Synchronous; the
+ * game keeps running afterwards. Returns false if no frame anchor is armed yet
+ * or the write fails. */
+bool eb_savestate_save(const char *path);
+
+/* Load a savestate slot. The live menu stack can't be overwritten in place, so
+ * this stages `path` and reboots into the shared cold-boot restore (like a
+ * hibernation wake). Never returns on success; returns false only when the slot
+ * is missing or the staging write fails. */
+bool eb_savestate_load(const char *path);
+
+/* Restore a snapshot directly from `path` at startup (for the launcher's
+ * load_state arg — already a fresh boot, so no reboot needed). Never returns on
+ * success; returns to fall through to a fresh start on any failure. */
+void eb_savestate_restore_path(const char *path, uint8_t *eb_rodata, uint32_t eb_rodata_len);
 
 #ifdef __cplusplus
 }

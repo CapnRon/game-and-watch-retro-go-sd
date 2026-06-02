@@ -102,43 +102,52 @@ static void PatchCodeRodataOffset(uint8_t *rodata, uint32_t rodata_length)
                      rodata_base, offset, rodata_length, /*skip_main_code=*/true);
 }
 
+/* Defined in gw_video.c: re-render the current (frozen) PPU frame into the
+ * launcher's active framebuffer. Used for the pause-menu background and here. */
+extern void eb_video_repaint_active(void);
+
 static void *Screenshot(void)
 {
+    /* Render the live (frozen) PPU frame into the launcher's active buffer so
+     * retro-go's cover/menu capture sees the running game rather than black.
+     * Same read-only path the pause-menu background uses; the caller has the
+     * game paused, so the PPU state is stable. */
     lcd_wait_for_vblank();
     lcd_clear_active_buffer();
-    /* TODO: render the current PPU frame into the active buffer once the
-     * platform_video_send_scanline implementation in gw_video.c is wired up.
-     * For now this is just a black frame to keep the launcher's cover-capture
-     * hook from crashing. */
+    eb_video_repaint_active();
     return lcd_get_active_buffer();
 }
 
-/* TODO: real implementations once title screen boots. EarthBound's save
- * format is a flat 7680-byte buffer (SAVE_FILE_SIZE in src/save.c), so the
- * retro-go "savestate" and "SRAM" concepts collapse to the same content
- * here. First-boot goal is title-screen-only; saves are post-MVP. */
+/* EarthBound is a NATIVE port: the live game position lives on the host C call
+ * stack, so a data-only emulator save-state is impossible. A retro-go
+ * "savestate" is therefore the SAME RAM_EMU + C-stack core-dump used by
+ * sleep/resume (gw_eb_hibernate.c), written to the slot path instead of the
+ * .hib. Save is synchronous and anchored to the per-frame resume context that
+ * platform_input_poll() records; load can only be applied safely from a cold
+ * boot, so eb_savestate_load() stages the slot and reboots — it does not
+ * return on success. */
 static bool eb_LoadState(char *savePathName)
 {
-    (void)savePathName;
-    return false;
+    return eb_savestate_load(savePathName);  /* reboots into restore on success */
 }
 
 static bool eb_SaveState(char *savePathName)
 {
-    (void)savePathName;
-    return true;
+    return eb_savestate_save(savePathName);
 }
 
+/* EarthBound writes its 7680-byte save buffer straight to SD whenever the
+ * player saves in-game (save_game() -> platform_save_write; see gw_save.c), so
+ * there is no battery-backed SRAM image held in RAM to flush. retro-go calls
+ * this hook on exit/sleep; for EB it is intentionally a no-op. */
 static void eb_SramSave(void)
 {
-    /* TODO: write the 7680-byte EarthBound save buffer to ODROID_PATH_SAVE_SRAM. */
 }
 
 extern int earthbound_main(void);
 
 int app_main_earthbound(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
 {
-    (void)load_state;
     (void)start_paused;
     (void)save_slot;
 
@@ -176,8 +185,18 @@ int app_main_earthbound(uint8_t load_state, uint8_t start_paused, int8_t save_sl
      * game frame — earthbound_main() is never reached on that path. On any
      * failure (missing/corrupt/wrong-build snapshot) this returns and we fall
      * through to a normal fresh start. */
-    if (eb_hibernate_pending())
+    if (eb_hibernate_pending()) {
         eb_hibernate_restore(eb_rodata, eb_rodata_length);
+    } else if (load_state) {
+        /* Launcher asked us to resume a savestate slot at startup. We are already
+         * at a fresh boot, so restore straight from the slot (no reboot needed);
+         * this longjmps into the resumed game on success and never returns. */
+        char *p = odroid_system_get_path(ODROID_PATH_SAVE_STATE, ACTIVE_FILE->path);
+        if (p) {
+            eb_savestate_restore_path(p, eb_rodata, eb_rodata_length);
+            free(p);  /* only reached if the restore was rejected */
+        }
+    }
 
     /* Hand off to upstream — earthbound_main() runs the game loop forever. */
     earthbound_main();

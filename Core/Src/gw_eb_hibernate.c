@@ -46,6 +46,9 @@ extern bool platform_video_init(void);
 extern void platform_audio_rearm(void);
 
 #define EB_HIB_PATH          "/saves/EarthBound.hib"
+/* A savestate-load reboot drops the chosen slot path here; the boot-time
+ * restore picks it up and restores from that slot instead of the .hib. */
+#define EB_LOAD_SIDECAR      "/saves/EarthBound.loadstate"
 #define EB_HIB_FILE_MAGIC    0x32484245u  /* 'EBH2' — snapshot format v2; bumped
                                            * when the build-identity hash moved
                                            * from GIT_TAG to a content hash, so
@@ -80,6 +83,13 @@ static eb_hib_header_t s_hdr;
 static FIL           s_fil;
 static uint32_t      s_rodata_addr;
 static uint32_t      s_rodata_len;
+
+/* Per-frame savestate resume anchor (see eb_savestate_frame_jb). Captured at the
+ * top of platform_input_poll, above any pause-menu stack a save can be taken
+ * from, so a restored savestate resumes into the game loop, not the menu. */
+static jmp_buf       s_frame_jb;
+static uint32_t      s_frame_sp;
+static bool          s_frame_armed;
 
 static uint32_t eb_hib_fnv(uint32_t h, const uint8_t *p, uint32_t n)
 {
@@ -187,6 +197,58 @@ bool eb_hibernate_pending(void)
 
 /* ============================ SAVE ============================ */
 
+/* Write a snapshot {header, RAM_EMU pool, C stack} to `path`. The caller
+ * supplies the resume context: saved_sp is the base of the stack region to
+ * capture, jb the setjmp context to longjmp into on restore; [saved_sp, _estack)
+ * must be a quiescent, self-consistent C stack. Cleans D-cache so FatFs reads
+ * the latest bytes, but does NOT touch audio/LCD/power — that is the caller's
+ * concern (hibernate powers off; a savestate keeps running). Returns true iff
+ * the file was fully written.
+ *
+ * Saves the ENTIRE RAM_EMU pool: the bump high-water mark sits within ~6 KB of
+ * the top and EB only allocates at init (lakesnes audio; EB src never mallocs —
+ * see eb_alloc.h), so there is no live bump pointer to trim against or restore.
+ * NOTE: that invariant breaks if anything starts ram_malloc()'ing during
+ * gameplay; then the bump pointer would need saving/restoring. */
+static bool eb_snapshot_write(const char *path, uint32_t saved_sp, const jmp_buf jb)
+{
+    uint32_t estack = (uint32_t)&_estack;
+    uint32_t stack_size = estack - saved_sp;
+    uint32_t ram_emu_start = (uint32_t)__RAM_EMU_START__;
+    uint32_t ram_emu_size = (uint32_t)&__RAM_EMU_END__ - ram_emu_start;
+
+    if (stack_size == 0 || stack_size > EB_HIB_MAX_STACK) {
+        /* Refuse rather than write a bad snapshot. */
+        printf("[EB snap] refused: stack=%lu\n", (unsigned long)stack_size);
+        return false;
+    }
+
+    /* Push cached writes to physical RAM before FatFs reads them. */
+    SCB_CleanDCache();
+
+    memset(&s_hdr, 0, sizeof(s_hdr));
+    s_hdr.magic = EB_HIB_FILE_MAGIC;
+    s_hdr.build_hash = eb_hib_build_hash();  /* opens+closes ACTIVE_FILE first */
+    s_hdr.saved_sp = saved_sp;
+    s_hdr.stack_size = stack_size;
+    s_hdr.ram_emu_size = ram_emu_size;
+    s_hdr.rodata_orig = s_rodata_addr;
+    s_hdr.rodata_len = s_rodata_len;
+    memcpy(s_hdr.jb, jb, sizeof(jmp_buf));
+
+    f_mkdir("/saves");  /* harmless if it already exists */
+
+    bool ok = (f_open(&s_fil, path, FA_CREATE_ALWAYS | FA_WRITE) == FR_OK);
+    if (ok) {
+        UINT bw = 0;
+        ok = (f_write(&s_fil, &s_hdr, sizeof(s_hdr), &bw) == FR_OK && bw == sizeof(s_hdr));
+        ok = ok && eb_hib_write_all((const void *)ram_emu_start, ram_emu_size);
+        ok = ok && eb_hib_write_all((const void *)saved_sp, stack_size);
+        f_close(&s_fil);
+    }
+    return ok;
+}
+
 void eb_hibernate(void)
 {
     if (setjmp(s_save_jb) != 0) {
@@ -199,55 +261,12 @@ void eb_hibernate(void)
     __asm volatile("mov %0, sp" : "=r"(saved_sp));
     saved_sp &= ~0x7u;
 
-    uint32_t estack = (uint32_t)&_estack;
-    uint32_t stack_size = estack - saved_sp;
-
-    /* Save the ENTIRE RAM_EMU pool. The bump allocator's high-water mark sits
-     * within ~6 KB of the top (EB static .bss ~648 KB + lakesnes audio ~70 KB
-     * of the 724 KB pool), so tracking it to trim the dump isn't worth the
-     * machinery. And EB only bump-allocates at init (lakesnes audio; EB src
-     * never mallocs — see eb_alloc.h), so there is no post-resume allocation
-     * that could read a stale bump pointer — nothing to restore on the far
-     * side. NOTE: this invariant breaks if any code starts ram_malloc()'ing
-     * during gameplay; then the bump pointer would need saving/restoring. */
-    uint32_t ram_emu_start = (uint32_t)__RAM_EMU_START__;
-    uint32_t ram_emu_size = (uint32_t)&__RAM_EMU_END__ - ram_emu_start;
-
-    if (stack_size > EB_HIB_MAX_STACK) {
-        /* Refuse rather than write a bad snapshot; game keeps running. */
-        printf("[EB hib] refused: stack=%lu too deep\n", (unsigned long)stack_size);
-        hibernate_requested = false;
-        return;
-    }
-
     /* Freeze the RAM_EMU audio ring vs. the SAI ISR so it isn't dumped torn. */
     audio_stop_playing();
     /* Don't hand a partially-presented frame to the panel during the dump. */
     lcd_sleep_while_swap_pending();
-    /* Push cached writes to physical RAM before FatFs reads them. */
-    SCB_CleanDCache();
 
-    memset(&s_hdr, 0, sizeof(s_hdr));
-    s_hdr.magic = EB_HIB_FILE_MAGIC;
-    s_hdr.build_hash = eb_hib_build_hash();
-    s_hdr.saved_sp = saved_sp;
-    s_hdr.stack_size = stack_size;
-    s_hdr.ram_emu_size = ram_emu_size;
-    s_hdr.rodata_orig = s_rodata_addr;
-    s_hdr.rodata_len = s_rodata_len;
-    memcpy(s_hdr.jb, s_save_jb, sizeof(jmp_buf));
-
-    f_mkdir("/saves");  /* harmless if it already exists */
-
-    bool ok = (f_open(&s_fil, EB_HIB_PATH, FA_CREATE_ALWAYS | FA_WRITE) == FR_OK);
-    if (ok) {
-        UINT bw = 0;
-        ok = (f_write(&s_fil, &s_hdr, sizeof(s_hdr), &bw) == FR_OK && bw == sizeof(s_hdr));
-        ok = ok && eb_hib_write_all((const void *)ram_emu_start, ram_emu_size);
-        ok = ok && eb_hib_write_all((const void *)saved_sp, stack_size);
-        f_close(&s_fil);
-    }
-
+    bool ok = eb_snapshot_write(EB_HIB_PATH, saved_sp, s_save_jb);
     if (!ok) {
         printf("[EB hib] snapshot write failed\n");
         f_unlink(EB_HIB_PATH);
@@ -267,6 +286,77 @@ void eb_hibernate(void)
 
     /* Unreachable, but keep state sane if STANDBY somehow fell through. */
     hibernate_requested = false;
+}
+
+/* ---------------------- savestate slots (save side) ---------------------- */
+
+jmp_buf *eb_savestate_frame_jb(void)
+{
+    return &s_frame_jb;
+}
+
+void eb_savestate_arm_frame(uint32_t sp)
+{
+    s_frame_sp = sp;
+    s_frame_armed = true;
+}
+
+bool eb_savestate_save(const char *path)
+{
+    if (!s_frame_armed) {
+        /* No quiescent anchor captured yet (no frame has polled input). */
+        printf("[EB save] no frame anchor\n");
+        return false;
+    }
+
+    /* Anchor the snapshot to this frame's resume context (captured at the top of
+     * platform_input_poll, above the pause-menu stack we are called from), so a
+     * later restore resumes into the game loop rather than back into the menu.
+     * The game keeps running afterwards, so we leave audio alone — the pause
+     * menu has already frozen the producer; at worst the SAI ISR tears the audio
+     * ring by a single buffer, which is inaudible on resume. */
+    bool ok = eb_snapshot_write(path, s_frame_sp, s_frame_jb);
+    if (!ok)
+        printf("[EB save] snapshot write failed\n");
+    return ok;
+}
+
+bool eb_savestate_load(const char *path)
+{
+    if (!path || !*path)
+        return false;
+
+    /* Confirm the slot exists before we commit to a reboot. */
+    FIL f;
+    if (f_open(&f, path, FA_READ) != FR_OK) {
+        printf("[EB load] slot not found: %s\n", path);
+        return false;
+    }
+    f_close(&f);
+
+    /* The menu stack we are called from cannot be overwritten in place, so stage
+     * the slot path and reboot into the shared cold-boot restore (a savestate
+     * snapshot is byte-identical in format to a hibernation snapshot). */
+    f_mkdir("/saves");
+    bool ok = (f_open(&s_fil, EB_LOAD_SIDECAR, FA_CREATE_ALWAYS | FA_WRITE) == FR_OK);
+    if (ok) {
+        UINT bw = 0;
+        UINT n = (UINT)strlen(path);
+        ok = (f_write(&s_fil, path, n, &bw) == FR_OK && bw == n);
+        f_close(&s_fil);
+    }
+    if (!ok) {
+        printf("[EB load] sidecar write failed\n");
+        f_unlink(EB_LOAD_SIDECAR);
+        return false;
+    }
+
+    odroid_settings_StartupFile_set(ACTIVE_FILE);
+    odroid_settings_commit();
+    HAL_RTCEx_BKUPWrite(&hrtc, EB_HIB_RTC_REG, EB_HIB_RTC_MAGIC);
+
+    HAL_NVIC_SystemReset();  /* never returns; cold boot picks up the sidecar */
+    return true;
 }
 
 /* ============================ RESTORE ============================ */
@@ -332,13 +422,16 @@ static void eb_hib_switch_and_jump(const void *staging, uint32_t dst_sp,
     __builtin_unreachable();
 }
 
-void eb_hibernate_restore(uint8_t *eb_rodata, uint32_t eb_rodata_len)
+/* Core restore: read the snapshot at `path`, validate it against the running
+ * binary, repopulate RAM_EMU + the C stack, and longjmp back into the saved
+ * frame. Never returns on success; returns to fall through to a fresh start on
+ * any failure. `delete_on_reject` removes the file when it fails validation —
+ * true for our private .hib (stale junk), false for a player savestate slot
+ * (never destroy their save just because the firmware changed). */
+static void eb_snapshot_restore(const char *path, uint8_t *eb_rodata,
+                                uint32_t eb_rodata_len, bool delete_on_reject)
 {
     (void)eb_rodata_len;
-
-    /* Clear the flag first: if the restore crashes, the next boot is a clean,
-     * normal launch rather than a restore loop. */
-    HAL_RTCEx_BKUPWrite(&hrtc, EB_HIB_RTC_REG, 0);
 
     if (!fs_mounted)
         return;
@@ -348,7 +441,7 @@ void eb_hibernate_restore(uint8_t *eb_rodata, uint32_t eb_rodata_len)
      * FF_FS_TINY (one shared window; keep to a single open handle). */
     uint32_t cur_hash = eb_hib_build_hash();
 
-    if (f_open(&s_fil, EB_HIB_PATH, FA_READ) != FR_OK)
+    if (f_open(&s_fil, path, FA_READ) != FR_OK)
         return;
 
     UINT br = 0;
@@ -365,9 +458,9 @@ void eb_hibernate_restore(uint8_t *eb_rodata, uint32_t eb_rodata_len)
      * snapshot. The build-hash check is the primary guard against resuming into
      * a different binary (which would BSOD); the structural checks catch a
      * corrupt/truncated header even if the hash somehow matched. On ANY
-     * rejection we fall through to a clean fresh boot — hibernation never
+     * rejection we fall through to a clean fresh boot — restoring never
      * touches the player's committed in-game SRAM save, so only the
-     * (unrestorable) sleep state is lost, never real progress. */
+     * (unrestorable) snapshot is lost, never real progress. */
     bool ok = s_hdr.magic == EB_HIB_FILE_MAGIC
            && s_hdr.build_hash == cur_hash
            && s_hdr.stack_size != 0
@@ -377,9 +470,10 @@ void eb_hibernate_restore(uint8_t *eb_rodata, uint32_t eb_rodata_len)
            && s_hdr.stack_size == estack - s_hdr.saved_sp
            && s_hdr.ram_emu_size == ram_emu_cap;  /* always the whole pool */
     if (!ok) {
-        printf("[EB hib] snapshot rejected (magic/build/consistency)\n");
+        printf("[EB snap] snapshot rejected (magic/build/consistency)\n");
         f_close(&s_fil);
-        f_unlink(EB_HIB_PATH);
+        if (delete_on_reject)
+            f_unlink(path);
         return;
     }
 
@@ -430,4 +524,41 @@ void eb_hibernate_restore(uint8_t *eb_rodata, uint32_t eb_rodata_len)
     __disable_irq();
     eb_hib_switch_and_jump(staging, s_hdr.saved_sp, s_hdr.stack_size, s_restore_jb);
     __builtin_unreachable();
+}
+
+void eb_hibernate_restore(uint8_t *eb_rodata, uint32_t eb_rodata_len)
+{
+    /* Clear the flag first: if the restore crashes, the next boot is a clean,
+     * normal launch rather than a restore loop. */
+    HAL_RTCEx_BKUPWrite(&hrtc, EB_HIB_RTC_REG, 0);
+
+    if (!fs_mounted)
+        return;
+
+    /* A savestate-load reboot leaves the chosen slot path in a sidecar; consume
+     * it and restore from there instead of the .hib. Read it fully and close it
+     * before eb_snapshot_restore opens any handle (FF_FS_TINY shares one
+     * window). A missing sidecar means this is an ordinary sleep/resume. */
+    char slotbuf[256];
+    const char *path = EB_HIB_PATH;
+    bool from_slot = false;
+    FIL f;
+    if (f_open(&f, EB_LOAD_SIDECAR, FA_READ) == FR_OK) {
+        UINT br = 0;
+        if (f_read(&f, slotbuf, sizeof(slotbuf) - 1, &br) == FR_OK && br > 0) {
+            slotbuf[br] = '\0';
+            path = slotbuf;
+            from_slot = true;
+        }
+        f_close(&f);
+        f_unlink(EB_LOAD_SIDECAR);
+    }
+
+    /* Only ever delete our private .hib on rejection — never the player's slot. */
+    eb_snapshot_restore(path, eb_rodata, eb_rodata_len, /*delete_on_reject=*/!from_slot);
+}
+
+void eb_savestate_restore_path(const char *path, uint8_t *eb_rodata, uint32_t eb_rodata_len)
+{
+    eb_snapshot_restore(path, eb_rodata, eb_rodata_len, /*delete_on_reject=*/false);
 }
