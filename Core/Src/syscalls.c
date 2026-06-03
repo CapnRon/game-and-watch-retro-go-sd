@@ -484,7 +484,7 @@ int _open(const char *name, int flags, int mode)
             return -1;
         }
 
-        char normalized_name[PATH_MAX];
+        char normalized_name[RG_PATH_MAX];
         const char *frogfs_name = normalize_frogfs_path(name, normalized_name, sizeof(normalized_name));
         if (!frogfs_name) {
             errno = ENAMETOOLONG;
@@ -682,7 +682,7 @@ int stat(const char *path, struct stat *st)
             return -1;
         }
 
-        char normalized_path[PATH_MAX];
+        char normalized_path[RG_PATH_MAX];
         const char *frogfs_path = normalize_frogfs_path(path, normalized_path, sizeof(normalized_path));
         if (!frogfs_path) {
             errno = ENAMETOOLONG;
