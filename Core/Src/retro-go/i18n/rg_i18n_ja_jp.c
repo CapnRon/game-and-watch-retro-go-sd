@@ -87,6 +87,7 @@ const lang_t lang_ja_jp LANG_DATA = {
     .s_md_Option_OFF = "\x5",
     .s_md_AudioFilter = "オーディオフィルター",
     .s_md_VideoUpscaler = "ビデオアップスケール",
+    .s_md_Region = "地域",
     //=====================================================================
     
     // Core\Src\porting\md\main_wsv.c ================================

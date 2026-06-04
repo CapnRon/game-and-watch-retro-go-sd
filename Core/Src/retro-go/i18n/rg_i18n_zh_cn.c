@@ -56,6 +56,7 @@ const lang_t lang_zh_cn LANG_DATA = {
     .s_md_Option_OFF = "\x5",
     .s_md_AudioFilter = "音频提升",
     .s_md_VideoUpscaler = "视频提升",
+    .s_md_Region = "地区",
     //=====================================================================
 
     // Core\Src\porting\nes\main_nes.c =====================================
