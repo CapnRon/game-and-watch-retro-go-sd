@@ -4,6 +4,8 @@
 #include "gw_lcd.h"
 #include "gw_malloc.h"
 
+#pragma GCC optimize("Os")
+
 #if !defined(BIG_BANK)
 #define BIG_BANK 1
 #endif
@@ -20,6 +22,9 @@ void rg_reset_logo_buffers() {
 }
 
 retro_logo_image *rg_get_logo(int16_t logo_index) {
+    uint8_t header[4];
+    uint16_t width, height;
+    size_t read;
     if (logo_index < 0)
         return NULL;
 
@@ -52,13 +57,11 @@ retro_logo_image *rg_get_logo(int16_t logo_index) {
 
     int current_logo_index = 0;
     while (1) {
-        uint16_t width, height;
-        size_t read;
+        if (fread(header, 1, 4, file) != 4)
+            break;
 
-        read = fread(&width, sizeof(uint16_t), 1, file);
-        if (read == 0) break;
-        read = fread(&height, sizeof(uint16_t), 1, file);
-        if (read == 0) break;
+        width = (uint16_t)(header[0] | ((uint16_t)header[1] << 8));
+        height = (uint16_t)(header[2] | ((uint16_t)header[3] << 8));
 
         size_t data_size = ((width + 7) >> 3) * height; // width aligned to 8 * height / 8
         data_size = (data_size + 3) & ~3; // align to 4 bytes
@@ -1621,7 +1624,7 @@ const retro_logo_image logo_nintendo LOGO_DATA = {
 
 const retro_logo_image logo_sega LOGO_DATA = {
     56,
-    17,
+    18,
     {
         // width56, height:17
         0x0f, 0xf0, 0x3f, 0xc1, 0xfe, 0x03, 0x80, //____########______########_____########_______###_______
@@ -1641,6 +1644,7 @@ const retro_logo_image logo_sega LOGO_DATA = {
         0x00, 0x71, 0xc0, 0x0e, 0x06, 0xdc, 0x06, //_________###___###__________###______##_##_###_______##_
         0xff, 0xe0, 0xff, 0xc7, 0xfe, 0xdd, 0xff, //###########_____##########___##########_##_###_#########
         0xff, 0x80, 0x3f, 0xc1, 0xfe, 0xd9, 0xff, //#########_________########_____########_##_##__#########
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //________________________________________________________
     },
 };
 
@@ -2402,9 +2406,9 @@ const unsigned char img_clock_09[] GFX_DATA = {
 // PICO-8 header logo (must be LAST LOGO_DATA entry to not shift existing enum indices)
 const retro_logo_image header_pico8 LOGO_DATA = {
     138,
-    23,
+    24,
     {
-        // width:138, height:23
+        // width:138, height:24
         0x07, 0xff, 0xfe, 0x1f, 0xff, 0xfc, 0x01, 0xff, 0xf8, 0x03, 0xff, 0xff, 0x00, 0x00, 0x01, 0xff, 0xff, 0x80, //_____##################____###################_________##############_________##################_______________________##################_
         0x0f, 0xff, 0xfe, 0x1f, 0xff, 0xfc, 0x03, 0xff, 0xf8, 0x07, 0xff, 0xff, 0x00, 0x00, 0x01, 0xff, 0xff, 0x80, //____###################____###################________###############________###################______________________ ##################_
         0x1f, 0xff, 0xfe, 0x1f, 0xff, 0xfc, 0x07, 0xff, 0xf8, 0x0f, 0xff, 0xff, 0x00, 0x00, 0x01, 0xff, 0xff, 0x80, //___####################____###################_______################_______####################______________________ ##################_
@@ -2428,6 +2432,7 @@ const retro_logo_image header_pico8 LOGO_DATA = {
         0xff, 0xc0, 0x00, 0x1f, 0xff, 0xfc, 0x3f, 0xff, 0xf8, 0x7f, 0xff, 0xf8, 0x00, 0x00, 0x7f, 0xff, 0xff, 0x80, //##########_________________###################____###################____####################____________________########################_
         0xff, 0xc0, 0x00, 0x1f, 0xff, 0xfc, 0x3f, 0xff, 0xf8, 0x7f, 0xff, 0xf0, 0x00, 0x00, 0x7f, 0xff, 0xff, 0x80, //##########_________________###################____###################____###################_____________________########################_
         0xff, 0xc0, 0x00, 0x1f, 0xff, 0xfc, 0x3f, 0xff, 0xf8, 0x7f, 0xff, 0xe0, 0x00, 0x00, 0x7f, 0xff, 0xff, 0x80, //##########_________________###################____###################____##################______________________########################_
+        0xff, 0xc0, 0x00, 0x1f, 0xff, 0xfc, 0x3f, 0xff, 0xf8, 0x7f, 0xff, 0xc0, 0x00, 0x00, 0x7f, 0xff, 0xff, 0x80, //##########_________________###################____###################____#################_______________________########################_
     },
 };
 
