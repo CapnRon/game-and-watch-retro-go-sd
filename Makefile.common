@@ -42,7 +42,7 @@ DOCKER ?= 0
 _DOCKER_FWDVARS := $(filter-out DOCKER=%,$(MAKEOVERRIDES))
 
 # Docker bulid args
-ARM_COMPILER_VERSION ?= 13.3.rel1
+ARM_COMPILER_VERSION ?= 15.2.rel1
 
 # Configure where data is stored in the external flash by
 # setting EXTFLASH_OFFSET. Useful if the first 1MB/4MB are to be preserved.
