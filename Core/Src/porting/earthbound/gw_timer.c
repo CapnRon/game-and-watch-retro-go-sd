@@ -20,7 +20,7 @@
  * so generation is phase-locked to playback and the DMA is the master clock.
  * platform_timer_sleep_until() therefore no longer calls common_emu_sound_sync()
  * (that would double-pace and starve the buffer). Requires
- * PLATFORM_HOST_PACED_FRAMESKIP for the EarthBound build.
+ * EB_HOST_PACED_FRAMESKIP for the EarthBound build.
  */
 
 #include "platform/platform.h"
@@ -45,7 +45,7 @@ static uint32_t last_fps_tick;
 static uint32_t last_cyc;
 static uint64_t cyc_high;
 
-#ifdef PLATFORM_HOST_PACED_FRAMESKIP
+#ifdef EB_HOST_PACED_FRAMESKIP
 /* Frame-skip controller state (platform_timer_should_render), file-scope so
  * platform_timer_init() can reset it. This is CRITICAL after a STANDBY
  * hibernation resume: these statics live in RAM_EMU and are restored from the
@@ -66,7 +66,7 @@ bool platform_timer_init(void)
     common_emu_enable_dwt_cycles();
     last_cyc = DWT->CYCCNT;
     cyc_high = 0;
-#ifdef PLATFORM_HOST_PACED_FRAMESKIP
+#ifdef EB_HOST_PACED_FRAMESKIP
     /* Re-baseline the skip controller against the freshly-reset clock above. */
     skip_deadline = 0;
     skip_consecutive = 0;
@@ -124,7 +124,7 @@ void platform_timer_sleep_until(uint64_t deadline)
     wdog_refresh();
 }
 
-#ifdef PLATFORM_HOST_PACED_FRAMESKIP
+#ifdef EB_HOST_PACED_FRAMESKIP
 bool platform_timer_should_render(void)
 {
     /* Frame-skip + audio-pacing controller for EarthBound.
@@ -137,8 +137,8 @@ bool platform_timer_should_render(void)
      *
      * This hook is what makes EB skip renders at all: the upstream built-in
      * frame-skip in host_process_frame is disabled for this port (game_main.c
-     * defines MAX_FRAME_SKIP 0, so its skip branch is never taken). Without
-     * PLATFORM_HOST_PACED_FRAMESKIP, host_process_frame would render every
+     * defines EB_MAX_FRAME_SKIP 0, so its skip branch is never taken). Without
+     * EB_HOST_PACED_FRAMESKIP, host_process_frame would render every
      * frame at ~30 ms, dragging game logic AND audio production down to ~33 Hz
      * — half-speed gameplay plus a starved audio ring (the SAI consumes 60
      * frames/s but only ~33 would be produced).

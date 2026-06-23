@@ -89,7 +89,7 @@ pixel_t *platform_video_get_framebuffer(void)
 
 void platform_video_end_frame(void)
 {
-#ifdef PPU_PROFILE
+#ifdef EB_PPU_PROFILE
     uint64_t ef_t0 = platform_timer_ticks();
 #endif
     uint16_t *drawn = tb_buf[tb_draw];
@@ -132,7 +132,7 @@ void platform_video_end_frame(void)
      * displayed address, so no select-vs-vblank race. */
     tb_draw = (tb_draw + 1) % 3;
 
-#ifdef PPU_PROFILE
+#ifdef EB_PPU_PROFILE
     /* Black-frame hunt + stall detection (a long gap between presents = a frame
      * the loop blocked on, e.g. asset/music load — correlate with audio
      * underruns). With the FIFO-bounded rotation above the displayed-buffer
@@ -155,7 +155,7 @@ void platform_video_end_frame(void)
     }
 #endif
 
-#ifdef PPU_PROFILE
+#ifdef EB_PPU_PROFILE
     /* Confirm the vsync stall is gone: end_frame should now be ~0 (cache clean
      * + non-blocking present), not the ~15ms vblank wait of the old path. */
     {

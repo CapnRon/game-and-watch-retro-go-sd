@@ -34,7 +34,7 @@
 #include "common.h"
 #include "odroid_input.h"
 #include "odroid_overlay.h"
-#include "gw_eb_hibernate.h"
+#include "main_earthbound.h"
 
 /* Defined in main_earthbound.c; populated by us each frame. */
 extern odroid_gamepad_state_t eb_joystick;
@@ -74,33 +74,23 @@ void platform_input_shutdown(void) {}
 
 void platform_input_poll(void)
 {
-    /* Quiescent resume anchor for retro-go savestates. The pause-menu save/load
-     * hooks fire from deep inside common_emu_input_loop() below — but a restored
-     * savestate must resume into the game loop, not back into the menu. So we
-     * record the restore context HERE, above the menu stack, every frame. On a
-     * loaded-state cold boot the restore longjmps back to this setjmp; we just
-     * return into host_process_frame(), which runs the resumed frame. (The
-     * captured stack region [SP, _estack) is the game's call chain; the menu it
-     * later descends into lives at lower addresses and is never part of it.) */
-    if (setjmp(*eb_savestate_frame_jb()) != 0) {
-        return;
-    }
-    {
-        uint32_t sp;
-        __asm volatile("mov %0, sp" : "=r"(sp));
-        eb_savestate_arm_frame(sp & ~0x7u);
-    }
-
+    /* Native savestate load is applied in-process at the root-loop boundary
+     * (host_root_boundary), so there is no longer a per-frame setjmp resume
+     * anchor here — a loaded slot simply replaces the game-state structs and the
+     * next frame renders it. */
     odroid_input_read_gamepad(&eb_joystick);
 
-    /* Standalone POWER → STANDBY hibernation. Intercept it here, BEFORE
+    /* Standalone POWER → STANDBY sleep. Intercept it here, BEFORE
      * common_emu_input_loop, and consume the bit so the common layer's own
-     * (no-op-for-EB) power/sleep path doesn't also fire. The actual snapshot is
-     * taken at the next frame boundary in wait_for_vblank(), where the stack
-     * holds only game frames. POWER+PAUSE/SET stays with the common layer. */
+     * power/sleep path doesn't also fire. eb_request_standby() asks the native
+     * engine for a torn-safe savestate; the request is issued from this per-frame
+     * poll (reached every frame, including deep inside blocking helpers via
+     * host_process_frame) so those helpers unwind to the root boundary, where the
+     * slot is written and earthbound_main()'s platform_standby_poll() powers down.
+     * POWER+PAUSE/SET stays with the common layer. */
     if (eb_joystick.values[ODROID_INPUT_POWER] &&
         !eb_joystick.values[ODROID_INPUT_VOLUME]) {
-        hibernate_requested = true;
+        eb_request_standby();
         eb_joystick.values[ODROID_INPUT_POWER] = 0;
     }
 
@@ -145,16 +135,6 @@ uint16_t platform_input_get_aux(void)
 
 bool platform_input_quit_requested(void)
 {
-    /* STANDBY hibernation is taken here rather than via an edit to upstream's
-     * wait_for_vblank(): this port-specific quit hook is already polled at every
-     * frame boundary (and from the deep battle/text/menu loops that call it
-     * directly), which is exactly where we want a quiescent snapshot point.
-     * platform_input_poll() sets the flag when POWER is pressed; eb_hibernate()
-     * snapshots RAM to SD and enters STANDBY (never returns), or returns here on
-     * the resume/failure path with the flag already cleared. */
-    if (hibernate_requested)
-        eb_hibernate();
-
     return quit_requested;
 }
 

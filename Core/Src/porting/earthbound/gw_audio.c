@@ -233,7 +233,7 @@ void eb_audio_pump(void)
     for (uint16_t i = 0; i < want; i++)
         eb_produce_frame();
 
-#ifdef PPU_PROFILE
+#ifdef EB_PPU_PROFILE
     /* Throttled starvation report (~every 4 s) so heavy-scene / long-op
      * underruns show up on `make monitor` without spamming. */
     {

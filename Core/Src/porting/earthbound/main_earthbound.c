@@ -17,6 +17,7 @@
 
 #include <odroid_system.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <string.h>
 
 #include "main.h"
@@ -25,6 +26,7 @@
 #include "gw_buttons.h"
 #include "gw_malloc.h"
 #include "gw_ofw.h"
+#include "gw_sleep.h"
 
 #include "stm32h7xx_hal.h"
 
@@ -32,8 +34,9 @@
 #include "rom_manager.h"
 #include "appid.h"
 
-#include "gw_eb_hibernate.h"
 #include "main_earthbound.h"
+
+#include "game_main.h"   /* host_request_capture/load/status — native savestate engine */
 
 #pragma GCC optimize("Ofast")
 
@@ -118,22 +121,27 @@ static void *Screenshot(void)
     return lcd_get_active_buffer();
 }
 
-/* EarthBound is a NATIVE port: the live game position lives on the host C call
- * stack, so a data-only emulator save-state is impossible. A retro-go
- * "savestate" is therefore the SAME RAM_EMU + C-stack core-dump used by
- * sleep/resume (gw_eb_hibernate.c), written to the slot path instead of the
- * .hib. Save is synchronous and anchored to the per-frame resume context that
- * platform_input_poll() records; load can only be applied safely from a cold
- * boot, so eb_savestate_load() stages the slot and reboots — it does not
- * return on success. */
+/* retro-go savestate slots now ride the upstream native savestate engine
+ * (state_dump.c): a structured snapshot of the game-state structs, written/read
+ * through our platform_savestate_* backend (gw_savestate.c). Both hooks run from
+ * deep inside common_emu_input_loop() — one level below the root-loop boundary —
+ * so they REQUEST the action rather than perform it: host_request_capture/load()
+ * set a pending flag, the loop free-runs any in-flight blocking helper to the
+ * root, and host_root_boundary() (game_main.c) does the torn-safe save / in-place
+ * load. No reboot, no per-frame stack anchor. We point the backend at the
+ * launcher's chosen slot path first via eb_savestate_set_base(). */
 static bool eb_LoadState(char *savePathName)
 {
-    return eb_savestate_load(savePathName);  /* reboots into restore on success */
+    eb_savestate_set_base(savePathName);
+    host_request_load();   /* serviced in-place at the next root boundary */
+    return true;
 }
 
 static bool eb_SaveState(char *savePathName)
 {
-    return eb_savestate_save(savePathName);
+    eb_savestate_set_base(savePathName);
+    host_request_capture();  /* torn-safe write at the next root boundary */
+    return true;
 }
 
 /* EarthBound writes its 7680-byte save buffer straight to SD whenever the
@@ -146,9 +154,64 @@ static void eb_SramSave(void)
 
 extern int earthbound_main(void);
 
+/* ---- STANDBY sleep / resume ------------------------------------------------
+ *
+ * "Sleep" is a native savestate written to a private slot plus a full
+ * power-down; "resume" (below, in app_main_earthbound) is a native in-process
+ * load queued at cold boot. This replaces the old gw_eb_hibernate.c glue: the
+ * capture is requested from the per-frame input poll (gw_input.c -> here, so
+ * blocking helpers unwind to the root boundary), and the power-down happens at
+ * earthbound_main()'s root boundary via platform_root_boundary() (the generic
+ * host root-boundary hook; STANDBY is its only consumer today).
+ */
+#define EB_SLEEP_PATH     "/saves/EarthBound.sleep"    /* private; not a user slot */
+#define EB_HIB_RTC_MAGIC  0x45424948u                  /* 'HIBE' in RTC_BKP_DR1, survives STANDBY */
+#define EB_HIB_RTC_REG    RTC_BKP_DR1
+
+/* Set true by gw_input.c when POWER is pressed; one-shot per sleep attempt. */
+static volatile bool s_standby_requested;
+
+void eb_request_standby(void)
+{
+    if (s_standby_requested)
+        return;   /* request already in flight — don't restart the capture */
+    /* Point the savestate backend at the private sleep snapshot, then request a
+     * torn-safe capture. host_request_capture() flags the in-flight blocking
+     * helpers to free-run to the root boundary, where the engine writes it. */
+    eb_savestate_set_base(EB_SLEEP_PATH);
+    host_request_capture();
+    s_standby_requested = true;
+}
+
+void platform_root_boundary(void)
+{
+    if (!s_standby_requested)
+        return;
+
+    switch (host_capture_status()) {
+    case HOST_CAPTURE_COMMITTED:
+        /* Durably on the card. Mark EarthBound as the startup app so the launcher
+         * auto-relaunches it on wake, arm the STANDBY-surviving marker, and power
+         * down. Never returns; we come back via cold boot + the resume path. */
+        odroid_settings_StartupFile_set(ACTIVE_FILE);
+        odroid_settings_commit();
+        HAL_RTCEx_BKUPWrite(&hrtc, EB_HIB_RTC_REG, EB_HIB_RTC_MAGIC);
+        GW_EnterDeepSleep(true, NULL, NULL);
+        s_standby_requested = false;   /* unreachable; keep state sane */
+        break;
+    case HOST_CAPTURE_FAILED:
+        /* Capture abandoned (e.g. an indefinite input-wait never unwound) or slot
+         * I/O failed. Abort sleep and keep running; the prior snapshot, if any, is
+         * left intact by the engine's ping-pong write. */
+        s_standby_requested = false;
+        break;
+    default: /* HOST_CAPTURE_PENDING — still unwinding to the root boundary */
+        break;
+    }
+}
+
 int app_main_earthbound(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
 {
-    (void)start_paused;
     (void)save_slot;
 
     printf("EarthBound start\n");
@@ -169,32 +232,50 @@ int app_main_earthbound(uint8_t load_state, uint8_t start_paused, int8_t save_sl
     }
 
     /* Fix up RAM pointer tables (.noreloc) to point at the actual extflash
-     * location of the rodata blob. */
+     * location of the rodata blob. Native savestate serializes game-state structs
+     * (not raw RAM), and load applies on top of this freshly-patched boot, so no
+     * rodata re-stamping is needed on resume — this one pass is sufficient. */
     PatchCodeRodataOffset(eb_rodata, eb_rodata_length);
-
-    /* Remember this session's rodata runtime location so a hibernation snapshot
-     * can re-anchor its .noreloc pointers on the (cold-boot) restore. */
-    eb_hibernate_set_rodata(eb_rodata, eb_rodata_length);
 
     odroid_system_init(APPID_EARTHBOUND, EB_AUDIO_SAMPLE_RATE);
     odroid_system_emu_init(&eb_LoadState, &eb_SaveState, &Screenshot,
                            NULL, NULL, &eb_SramSave);
 
-    /* If we were launched to resume a STANDBY hibernation, overwrite the just-
-     * loaded RAM_EMU with the snapshot and longjmp straight back into the saved
-     * game frame — earthbound_main() is never reached on that path. On any
-     * failure (missing/corrupt/wrong-build snapshot) this returns and we fall
-     * through to a normal fresh start. */
-    if (eb_hibernate_pending()) {
-        eb_hibernate_restore(eb_rodata, eb_rodata_length);
+    /* Start paused into the in-game retro-go menu (same as zelda3/smw). The
+     * launcher requests this on power-on resume (rg_main.c: emulator_start(...,
+     * start_paused=true)) so the device comes back paused over the loaded state.
+     * pause_after_frames is decremented in common_emu_input_loop() — which
+     * gw_input.c's platform_input_poll() calls every frame — and trips
+     * pause_pressed, opening the pause menu. Audio is muted so the 2 lead-in
+     * frames are silent; the game menu unmutes on exit (odroid_overlay_game_menu).
+     * The native savestate load queued below is applied at the first root-loop
+     * boundary, so by the time the menu opens it darkens the loaded frame. */
+    if (start_paused) {
+        common_emu_state.pause_after_frames = 2;
+        odroid_audio_mute(true);
+    } else {
+        common_emu_state.pause_after_frames = 0;
+    }
+
+    /* Queue a native savestate load to be serviced at earthbound_main()'s first
+     * root-loop boundary (it free-runs in-process; no reboot). Two cold-boot
+     * sources, both pointing the backend at their slot before requesting:
+     *   1. STANDBY sleep resume — the RTC wake marker points the backend at the
+     *      private sleep snapshot (marker cleared first, so a crash mid-load
+     *      yields a clean normal launch on the next boot rather than a loop).
+     *   2. Launcher "load slot at startup" — the chosen ODROID_PATH_SAVE_STATE.
+     * On a missing/invalid slot the load silently fails at the root boundary and
+     * the game falls through to a normal fresh start. */
+    if (HAL_RTCEx_BKUPRead(&hrtc, EB_HIB_RTC_REG) == EB_HIB_RTC_MAGIC) {
+        HAL_RTCEx_BKUPWrite(&hrtc, EB_HIB_RTC_REG, 0);
+        eb_savestate_set_base(EB_SLEEP_PATH);
+        host_request_load();
     } else if (load_state) {
-        /* Launcher asked us to resume a savestate slot at startup. We are already
-         * at a fresh boot, so restore straight from the slot (no reboot needed);
-         * this longjmps into the resumed game on success and never returns. */
         char *p = odroid_system_get_path(ODROID_PATH_SAVE_STATE, ACTIVE_FILE->path);
         if (p) {
-            eb_savestate_restore_path(p, eb_rodata, eb_rodata_length);
-            free(p);  /* only reached if the restore was rejected */
+            eb_savestate_set_base(p);
+            host_request_load();
+            free(p);
         }
     }
 

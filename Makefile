@@ -899,7 +899,8 @@ Core/Src/porting/earthbound/gw_input.c \
 Core/Src/porting/earthbound/gw_audio.c \
 Core/Src/porting/earthbound/gw_timer.c \
 Core/Src/porting/earthbound/gw_debug.c \
-Core/Src/porting/earthbound/gw_save.c
+Core/Src/porting/earthbound/gw_save.c \
+Core/Src/porting/earthbound/gw_savestate.c
 
 GNUBOY_C_INCLUDES +=  \
 -ICore/Inc \
