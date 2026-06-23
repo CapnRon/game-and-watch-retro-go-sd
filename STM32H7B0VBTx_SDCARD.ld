@@ -579,6 +579,29 @@ INCLUDE build/fceumm_mappers.ld
   _OVERLAY_EARTHBOUND_LOAD_START = LOADADDR(.overlay_earthbound);
   _OVERLAY_EARTHBOUND_SIZE = SIZEOF(.overlay_earthbound);
 
+  /* EarthBound cold static .bss relocated to AHB SRAM (D2, uncached) to keep
+   * the triple-buffer (eb_fb3) and the lakesnes audio heap co-fitting in
+   * RAM_EMU. These two objects are touched per-frame / per-map-transition at
+   * most (entity table ~30 KB, map_loader shared_scratch 32 KB) — never the
+   * per-cycle hammering that makes the SPC ARAM unbearable uncached (see
+   * RAM.md). .bss-only on purpose: zeroed at load via a separate memset, so no
+   * SD-load init-copy is needed, and it sits OUTSIDE the
+   * [RAM_EMU_START .. _OVERLAY_EARTHBOUND_BSS_END] window that
+   * PatchCodeRodataOffset() rewrites (these hold no load-time rodata pointers).
+   * Must precede .overlay_earthbound_bss so ld assigns entity.o/map_loader.o
+   * .bss here instead of to the RAM_EMU catch-all below. */
+  .earthbound_ahb_bss (NOLOAD) : {
+    . = ALIGN(4);
+    _EARTHBOUND_AHB_BSS_START = .;
+    build/earthbound/entity.o (.bss .bss* COMMON)
+    build/earthbound/map_loader.o (.bss .bss* COMMON)
+    . = ALIGN(4);
+    _EARTHBOUND_AHB_BSS_END = .;
+  } > AHBRAM
+  _EARTHBOUND_AHB_BSS_SIZE = SIZEOF(.earthbound_ahb_bss);
+  ASSERT(SIZEOF(.earthbound_ahb_bss) <= __AHBRAM_LENGTH__,
+         "EARTHBOUND: relocated .bss overflows AHBRAM (shares it with the audio DMA buffer)")
+
   .overlay_earthbound_bss _OVERLAY_EARTHBOUND_LOAD_END : {
     . = ALIGN(4);
     _OVERLAY_EARTHBOUND_BSS_START = .;

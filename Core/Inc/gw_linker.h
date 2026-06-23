@@ -109,6 +109,8 @@ extern void * _OVERLAY_EARTHBOUND_BSS_END[];
 extern uint8_t _OVERLAY_EARTHBOUND_BSS_SIZE;
 extern void * _EARTHBOUND_MAIN_CODE_START[];
 extern void * _EARTHBOUND_MAIN_CODE_END[];
+extern void * _EARTHBOUND_AHB_BSS_START[];
+extern uint8_t _EARTHBOUND_AHB_BSS_SIZE;
 extern void * _OVERLAY_VIDEOPAC_LOAD_START[];
 extern uint8_t _OVERLAY_VIDEOPAC_SIZE;
 extern void * _OVERLAY_VIDEOPAC_BSS_START[];
