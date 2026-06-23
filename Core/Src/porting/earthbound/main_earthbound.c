@@ -171,6 +171,29 @@ extern int earthbound_main(void);
 /* Set true by gw_input.c when POWER is pressed; one-shot per sleep attempt. */
 static volatile bool s_standby_requested;
 
+/* Set in app_main_earthbound when a power-on resume must start in the in-game
+ * retro-go menu. Unlike zelda3/smw — which load their state synchronously before
+ * the frame loop — EB's load is queued (host_request_load) and only applied at
+ * earthbound_main()'s first root boundary. Arming pause_after_frames up front
+ * would trip the pause menu (decremented in common_emu_input_loop, ~twice per
+ * game_logic_entry) BEFORE that boundary services the load, opening the menu over
+ * the fresh-boot force-blank frame and stranding the load behind the blocking
+ * pause loop (black screen). So we defer arming the pause until platform_root_
+ * boundary() observes the load resolve. */
+static bool s_pause_after_load;
+
+/* Set in app_main_earthbound for a power-on resume; the savestate-load REQUEST is
+ * deferred to the first platform_root_boundary() rather than issued before
+ * earthbound_main(). Why: host_request_load() sets g_pending_root_action, and while
+ * that is pending host_process_frame() free-runs with rendering skipped. Requesting
+ * it before earthbound_main() therefore runs the WHOLE of game_init() + the boot
+ * intro in render-skipped free-run, which crashes the boot (watchdog reset loop).
+ * The submodule's resume contract is to request the load AFTER game_init(); the
+ * first root boundary is exactly that point (game_init + one boot frame have run
+ * normally), after which only a single free-run frame precedes the in-place apply.
+ * The slot base path is set via eb_savestate_set_base() in app_main and persists. */
+static bool s_resume_load_pending;
+
 void eb_request_standby(void)
 {
     if (s_standby_requested)
@@ -185,6 +208,28 @@ void eb_request_standby(void)
 
 void platform_root_boundary(void)
 {
+    /* Power-on resume, step 1: now that game_init() + one boot frame have run with
+     * full rendering, issue the deferred savestate-load request. Applied at the NEXT
+     * root boundary (one free-run frame later). Doing this here instead of before
+     * earthbound_main() keeps the boot sequence out of render-skipped free-run, which
+     * otherwise crashes it (watchdog reset loop). */
+    if (s_resume_load_pending) {
+        host_request_load();
+        s_resume_load_pending = false;
+        return;
+    }
+
+    /* Power-on resume, step 2: the queued load is applied by host_root_boundary()
+     * just before main.c calls us here. Once it has resolved (no longer PENDING), arm
+     * the pause so the menu darkens the LOADED frame a couple frames later —
+     * matching zelda3/smw, which pause over their already-loaded frame. Done even
+     * on a FAILED load so a missing/invalid slot still lands in the menu rather
+     * than silently fresh-starting unpaused. */
+    if (s_pause_after_load && host_capture_status() != HOST_CAPTURE_PENDING) {
+        common_emu_state.pause_after_frames = 2;
+        s_pause_after_load = false;
+    }
+
     if (!s_standby_requested)
         return;
 
@@ -241,22 +286,6 @@ int app_main_earthbound(uint8_t load_state, uint8_t start_paused, int8_t save_sl
     odroid_system_emu_init(&eb_LoadState, &eb_SaveState, &Screenshot,
                            NULL, NULL, &eb_SramSave);
 
-    /* Start paused into the in-game retro-go menu (same as zelda3/smw). The
-     * launcher requests this on power-on resume (rg_main.c: emulator_start(...,
-     * start_paused=true)) so the device comes back paused over the loaded state.
-     * pause_after_frames is decremented in common_emu_input_loop() — which
-     * gw_input.c's platform_input_poll() calls every frame — and trips
-     * pause_pressed, opening the pause menu. Audio is muted so the 2 lead-in
-     * frames are silent; the game menu unmutes on exit (odroid_overlay_game_menu).
-     * The native savestate load queued below is applied at the first root-loop
-     * boundary, so by the time the menu opens it darkens the loaded frame. */
-    if (start_paused) {
-        common_emu_state.pause_after_frames = 2;
-        odroid_audio_mute(true);
-    } else {
-        common_emu_state.pause_after_frames = 0;
-    }
-
     /* Queue a native savestate load to be serviced at earthbound_main()'s first
      * root-loop boundary (it free-runs in-process; no reboot). Two cold-boot
      * sources, both pointing the backend at their slot before requesting:
@@ -266,17 +295,56 @@ int app_main_earthbound(uint8_t load_state, uint8_t start_paused, int8_t save_sl
      *   2. Launcher "load slot at startup" — the chosen ODROID_PATH_SAVE_STATE.
      * On a missing/invalid slot the load silently fails at the root boundary and
      * the game falls through to a normal fresh start. */
+    bool load_queued = false;
     if (HAL_RTCEx_BKUPRead(&hrtc, EB_HIB_RTC_REG) == EB_HIB_RTC_MAGIC) {
         HAL_RTCEx_BKUPWrite(&hrtc, EB_HIB_RTC_REG, 0);
         eb_savestate_set_base(EB_SLEEP_PATH);
-        host_request_load();
+        load_queued = true;
     } else if (load_state) {
         char *p = odroid_system_get_path(ODROID_PATH_SAVE_STATE, ACTIVE_FILE->path);
         if (p) {
             eb_savestate_set_base(p);
-            host_request_load();
+            load_queued = true;
             free(p);
         }
+    }
+    /* Defer the actual host_request_load() to the first root boundary (see
+     * s_resume_load_pending) so the boot sequence runs with full rendering. */
+    s_resume_load_pending = load_queued;
+
+    /* Start paused into the in-game retro-go menu (same as zelda3/smw). The
+     * launcher requests this on power-on resume (rg_main.c: emulator_start(...,
+     * start_paused=true)) so the device comes back paused over the loaded state.
+     * pause_after_frames is decremented in common_emu_input_loop() — which
+     * gw_input.c's platform_input_poll() calls every frame — and trips
+     * pause_pressed, opening the pause menu, which mutes/unmutes audio itself.
+     *
+     * We deliberately do NOT odroid_audio_mute(true) here (zelda3/smw do). EB's
+     * SAI ISR refill stops advancing the ring's consumer tail while muted
+     * (gw_audio.c: eb_audio_dma_refill honors audio_mute), which is only safe when
+     * the producer is frozen — true inside the modal pause menu, but NOT during
+     * these lead-in frames where the game loop (and eb_audio_pump) still runs. A
+     * pre-mute there fills the ring and then deadlocks eb_audio_pump in its WFI
+     * wait for a slot the muted ISR never frees (a watchdog-refreshing hang). The
+     * lead-in is fresh-boot frames (APU silent), so leaving audio unmuted costs no
+     * audible blip; the pause menu mutes safely once it opens.
+     *
+     * Unlike zelda3/smw (which load synchronously above the frame loop and so can
+     * arm the pause immediately), EB's load was only QUEUED above and is applied
+     * at earthbound_main()'s first root boundary. Arming pause_after_frames here
+     * would trip the menu before that boundary, over the fresh-boot black frame,
+     * and strand the load behind the blocking pause loop. So when a load is
+     * pending we defer arming to platform_root_boundary(), which fires once the
+     * load resolves; only the no-load case (no resume slot) pauses immediately. */
+    if (start_paused) {
+        if (load_queued) {
+            s_pause_after_load = true;
+            common_emu_state.pause_after_frames = 0;
+        } else {
+            common_emu_state.pause_after_frames = 2;
+        }
+    } else {
+        common_emu_state.pause_after_frames = 0;
     }
 
     /* Hand off to upstream — earthbound_main() runs the game loop forever. */
