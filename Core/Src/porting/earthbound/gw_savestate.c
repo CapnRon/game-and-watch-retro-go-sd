@@ -35,8 +35,13 @@
 static char ss_base[256];
 static char ss_slot_path[260];
 
+static void ss_read_close(void);   /* defined below, by the read-handle cache */
+
 void eb_savestate_set_base(const char *path)
 {
+    /* A new logical capture/load is about to begin — drop any cached read handle
+     * from a prior operation so a stale path can't be reused. */
+    ss_read_close();
     if (!path) {
         ss_base[0] = '\0';
         return;
@@ -62,6 +67,24 @@ static const char *slot_path(int slot)
 static FIL ss_wfil;
 static int ss_wslot = -1;
 
+/* One cached read handle, reused across the many small reads a single load makes.
+ * The engine reads each slot ~100+ times per load (4 KiB CRC chunks over BOTH
+ * ping-pong slots during the peek, the chosen slot's CRC again in read_slot, plus
+ * the per-section reads). Re-opening per call re-walks the directory tree every
+ * time — tens of ms each on the slow SD, ~5 s total. Keeping the file open for
+ * consecutive same-path reads collapses that to a handful of opens. ss_ropen holds
+ * the path the handle is open for ("" = closed). */
+static FIL ss_rfil;
+static char ss_ropen[sizeof ss_slot_path];
+
+static void ss_read_close(void)
+{
+    if (ss_ropen[0]) {
+        f_close(&ss_rfil);
+        ss_ropen[0] = '\0';
+    }
+}
+
 bool platform_savestate_begin(int slot)
 {
     if (slot < 0 || slot >= SAVESTATE_SLOTS)
@@ -69,6 +92,7 @@ bool platform_savestate_begin(int slot)
     const char *path = slot_path(slot);
     if (!path)
         return false;
+    ss_read_close();   /* don't hold a read handle open while we truncate/rewrite */
     if (ss_wslot >= 0) {            /* a prior capture never committed — drop it */
         f_close(&ss_wfil);
         ss_wslot = -1;
@@ -109,12 +133,18 @@ size_t platform_savestate_read(int slot, size_t offset, void *dst, size_t size)
     const char *path = slot_path(slot);
     if (!path)
         return 0;
-    FIL f;
-    if (f_open(&f, path, FA_READ) != FR_OK)
-        return 0;
+    /* (Re)open only when the target path changes; successive reads of the same
+     * slot reuse the cached handle. Closed on a write (begin) or a new logical
+     * operation (eb_savestate_set_base). */
+    if (strcmp(ss_ropen, path) != 0) {
+        ss_read_close();
+        if (f_open(&ss_rfil, path, FA_READ) != FR_OK)
+            return 0;
+        strncpy(ss_ropen, path, sizeof ss_ropen - 1);
+        ss_ropen[sizeof ss_ropen - 1] = '\0';
+    }
     UINT br = 0;
-    if (f_lseek(&f, (FSIZE_t)offset) == FR_OK)
-        f_read(&f, dst, (UINT)size, &br);
-    f_close(&f);
+    if (f_lseek(&ss_rfil, (FSIZE_t)offset) == FR_OK)
+        f_read(&ss_rfil, dst, (UINT)size, &br);
     return br;
 }
