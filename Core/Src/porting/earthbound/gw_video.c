@@ -207,3 +207,21 @@ void eb_video_repaint_active(void)
 {
     ppu_render_frame(eb_scanline_to_active);
 }
+
+/* Savestate (de)compressor scratch — lend the idle third framebuffer.
+ *
+ * Saves/loads run at the root boundary while the game is paused: rendering is
+ * stopped and the pause UI presents through the launcher's fb1/fb2, so eb_fb3
+ * (EB's private triple-buffer member, never the LTDC-active buffer here) holds a
+ * stale game frame nobody is reading. state_dump.c borrows it as the tamp LZ
+ * window + working struct + compressed-I/O staging for the duration of the op;
+ * the next normal end_frame repaints it on resume. It's cacheable (RAM_EMU) and
+ * CPU-only during compression (no DMA), so no cache maintenance is needed while
+ * it's on loan. 150 KiB — vastly more than the few hundred bytes tamp needs at
+ * window_bits=8, with the slack going to chunkier SD staging. */
+void *platform_savestate_scratch(size_t *out_bytes)
+{
+    if (out_bytes)
+        *out_bytes = sizeof(eb_fb3);
+    return eb_fb3;
+}

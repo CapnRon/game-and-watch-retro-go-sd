@@ -996,6 +996,7 @@ C_DEFS_EARTHBOUND =  \
 -DEB_HOST_PACED_FRAMESKIP=1 \
 -DEB_PPU_FORCE_SPEED_OPT=1 \
 -DEB_HAVE_SAVESTATE_BACKEND=1 \
+-DTAMP_STREAM=0 \
 -include Core/Inc/porting/earthbound/eb_alloc.h \
 
 # Items/music headers come from `ebtools generate items-header` and
@@ -1024,12 +1025,16 @@ EARTHBOUND_GEN_HEADERS = \
 # overworld — a wild store from a latent UB that -O3's codegen exposes but -O2
 # leaves benign. -fno-strict-aliasing did not fix it, so it's not aliasing
 # (likely an uninitialized pointer landing on a bus-rejecting address at -O3).
-# The trailing -O2 wins over $(CFLAGS) because GCC uses the last -O switch.
+# The trailing -O switch wins over $(CFLAGS) because GCC uses the last one.
 # Re-bump to -O3 only after root-causing the wild store (gdb single-step).
+# EARTHBOUND_OBJ_OPT is per-object overridable (target-specific var): the vendored
+# tamp objects build at -Os since they're off the critical path (savestate I/O is
+# the bottleneck, not (de)compress CPU) and the EB overlay's RAM_EMU budget is tight.
+EARTHBOUND_OBJ_OPT ?= -O2
 define earthbound_obj_prereq_gen
 $$(BUILD_DIR)/earthbound/$(patsubst %.c,%.o,$(notdir $1)): $1 Makefile.common Makefile $$(SDK_HEADERS) $$(EARTHBOUND_GEN_HEADERS) $$(EARTHBOUND_HEADERS_EXTRA) | $$(BUILD_DIR)
 	$$(V)$$(ECHO) [ CC earthbound ] $$(notdir $$<)
-	$$(V)$$(CC) -c $$(CFLAGS) $$(C_DEFS_EARTHBOUND) $$(EARTHBOUND_C_INCLUDES) -Wa,-a,-ad,-alms=$$(BUILD_DIR)/earthbound/$$(notdir $$(<:.c=.lst)) $$< -o $$@ -O2 \
+	$$(V)$$(CC) -c $$(CFLAGS) $$(C_DEFS_EARTHBOUND) $$(EARTHBOUND_C_INCLUDES) -Wa,-a,-ad,-alms=$$(BUILD_DIR)/earthbound/$$(notdir $$(<:.c=.lst)) $$< -o $$@ $$(EARTHBOUND_OBJ_OPT) \
 	-Wno-parentheses -Wno-unknown-pragmas -Wno-incompatible-pointer-types -Wno-unused-const-variable -Wno-strict-aliasing -Wno-comment -Wno-unused-function -Wno-stack-usage -Wno-int-in-bool-context -Wno-unused-variable -Wno-unused-but-set-variable -Wno-implicit-function-declaration
 	$$(V)$$(CP) --redefine-syms=earthbound_redefines $$@
 
@@ -1040,6 +1045,15 @@ endef
 # is filtered out because it has its own explicit rule below with the
 # INCBIN_OUTPUT_SECTION + EBASSET_TABLE_ATTR overrides.
 $(eval $(foreach obj,$(filter-out %/embedded_assets_array.c,$(EARTHBOUND_C_SOURCES)),$(call earthbound_obj_prereq_gen,$(obj))))
+
+# Vendored tamp (savestate compression) + the savestate engine itself: build for
+# size, not speed — see note above. state_dump runs once per save/load (not per
+# frame) and its CRC now covers only the ~30 KB compressed payload, so -Os there
+# costs nothing measurable and buys back EB-overlay RAM_EMU headroom.
+$(BUILD_DIR)/earthbound/common.o \
+$(BUILD_DIR)/earthbound/compressor.o \
+$(BUILD_DIR)/earthbound/decompressor.o \
+$(BUILD_DIR)/earthbound/state_dump.o: EARTHBOUND_OBJ_OPT := -Os
 
 # embedded_assets_array.c is special: INCBIN_OUTPUT_SECTION routes the 3 MB
 # of asset bytes into .rodata_assets (caught by .rodata_earthbound in the
