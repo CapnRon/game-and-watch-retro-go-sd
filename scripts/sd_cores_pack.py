@@ -32,6 +32,7 @@ _SYSTEM_CORE_RELFILES: dict[str, frozenset[str]] = {
     "a2600": frozenset({"a2600.bin", "a2600_defprops.bin"}),
     "a7800": frozenset({"a7800.bin"}),
     "amstrad": frozenset({"amstrad.bin"}),
+    "zx": frozenset({"zx.bin"}),
     "tama": frozenset({"tama.bin"}),
     "mini": frozenset({"pkmini.bin"}),
     "videopac": frozenset({"videopac.bin"}),
