@@ -29,6 +29,7 @@
 #include "ff.h"
 #include "platform/platform.h"
 #include "main_earthbound.h"
+#include "odroid_audio.h"
 
 /* Base path for the current logical savestate; the two ping-pong files derive
  * from it. Set by eb_savestate_set_base() before host_request_capture/load. */
@@ -147,4 +148,17 @@ size_t platform_savestate_read(int slot, size_t offset, void *dst, size_t size)
     if (f_lseek(&ss_rfil, (FSIZE_t)offset) == FR_OK)
         f_read(&ss_rfil, dst, (UINT)size, &br);
     return br;
+}
+
+/* Gate the SAI ring's output across the blocking save/load I/O. state_dump_*_slots()
+ * runs at the root boundary with the game loop (and thus eb_audio_pump) stalled, so
+ * the free-running SAI ISR would otherwise drain the ring in ~133 ms and then drone
+ * the last frame for the rest of the ~0.6-1 s of SD I/O. Muting makes eb_audio_dma_refill
+ * emit silence instead; the producer is frozen so head/tail don't move and the ring is
+ * intact on unmute (save resumes seamlessly; load then refills over the stale frames).
+ * Safe here precisely because the producer isn't spinning — muting while eb_audio_pump
+ * runs would deadlock it (the muted ISR stops freeing ring slots). */
+void platform_savestate_freeze_audio(bool freeze)
+{
+    odroid_audio_mute(freeze);
 }
