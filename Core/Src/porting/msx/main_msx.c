@@ -14,6 +14,7 @@
 
 #include "common.h"
 #include "rom_manager.h"
+#include "odroid_overlay.h"
 #include "gw_lcd.h"
 #include "gw_ofw.h"
 #include "rg_i18n.h"
@@ -40,12 +41,14 @@
 #include "Actions.h"
 #include "Language.h"
 #include "LaunchFile.h"
+#include "Disk.h"
 #include "ArchEvent.h"
 #include "ArchSound.h"
 #include "ArchNotifications.h"
 #include "JoystickPort.h"
 #include "InputEvent.h"
 #include "R800.h"
+#include "VDP_MSX.h"
 #include "save_msx.h"
 #include "gw_malloc.h"
 #include "gw_linker.h"
@@ -92,6 +95,7 @@ int msx_button_select_key = EC_CTRL;
 static bool show_disk_icon = false;
 static char current_disk_path[PROP_MAXPATH] = {0};
 #define MSX_DISK_EXTENSION "dsk"
+#define MSX_DISK_EXTENSION_COMPRESSED "cdk"
 
 static int selected_key_index = 0;
 
@@ -120,7 +124,7 @@ static const uint8_t volume_table[ODROID_AUDIO_VOLUME_MAX + 1] = {
 
 #ifndef GNW_DISABLE_COMPRESSION
 /* Compression management */
-static size_t rom_decompress_size;
+size_t msx_rom_decompress_size;
 #endif
 
 /* Framebuffer management */
@@ -156,6 +160,7 @@ static void setPropertiesMsx(Machine *machine, int msxType);
 static void setupEmulatorRessources(int msxType);
 static void createProperties();
 static void blit(uint8_t *msx_fb, uint16_t *framebuffer);
+static void draw_disk_icon(void);
 
 void msxLedSetFdd1(int state) {
     show_disk_icon = state;
@@ -175,7 +180,7 @@ static bool msx_system_SaveState(const char *savePathName)
     for (uint8_t i = 0; i < 24; i++) {
         for (uint8_t j = 0; j < 24; j++) {
         if (IMG_DISKETTE[idx / 8] & (1 << (7 - idx % 8))) {
-            dest[274 + j + GW_LCD_WIDTH * (2 + i)] = 0xFFFF;
+            dest[272 + j + GW_LCD_WIDTH * (2 + i)] = 0xFFFF;
         }
         idx++;
         }
@@ -214,22 +219,51 @@ void load_gnw_msx_data() {
 
 static void *msx_screenshot()
 {
-    if ((vdpGetScreenMode() != 10) && (vdpGetScreenMode() != 12)) {
-        lcd_wait_for_vblank();
 
+    if ((vdpGetScreenMode() != 10) && (vdpGetScreenMode() != 11) && (vdpGetScreenMode() != 12)) {
+        lcd_wait_for_vblank();
         lcd_clear_active_buffer();
         blit(msx_framebuffer, lcd_get_active_buffer());
         return lcd_get_active_buffer();
-    } else {
-        return NULL;
     }
+
+    return NULL;
+}
+
+static bool msx_apply_cpu_clock(void)
+{
+    /* MSX needs boost OC when the user left settings at 0. gw_sleep restores
+     * settings OC on wake (280 MHz / 64 MHz OSPI) while gameplay runs at level
+     * 2 (~420 MHz / 100 MHz OSPI) — HDD titles then stutter until restart. */
+    if (odroid_settings_cpu_oc_level_get() == 0) {
+        SystemClock_Config(2);
+        return true;
+    }
+    return false;
 }
 
 static void msx_sleep_wake_up()
 {
-    if (strlen(current_disk_path) > 0) {
-        insertDiskette(properties, 0, current_disk_path, NULL, -1);
+    /* gw_sleep inits audio before this hook, still at settings OC. Reinit SAI/DMA
+     * after boosting the PLL so sample timing matches gameplay again. */
+    if (msx_apply_cpu_clock()) {
+        odroid_audio_init(AUDIO_MSX_SAMPLE_RATE);
+        audio_clear_buffers();
+        emulatorRestartSound();
     }
+
+    if (strlen(current_disk_path) == 0)
+        return;
+
+    if (msx_game_type != MSX_GAME_DISK && msx_game_type != MSX_GAME_HDIDE)
+        return;
+
+    const int drive = (msx_game_type == MSX_GAME_HDIDE) ? 1 : 0;
+
+    /* SD was unmounted: reopen the FILE* only. insertDiskette() would also
+     * reset the mixer and re-probe the image (disk icon flash). */
+    if (!diskReopenDrive(drive))
+        insertDiskette(properties, drive, current_disk_path, NULL, -1);
 }
 
 /* Core stubs */
@@ -949,9 +983,9 @@ static void setPropertiesMsx(Machine *machine, int msxType) {
                 machine->slotInfo[i].slot = 1;
                 machine->slotInfo[i].subslot = 0;
                 machine->slotInfo[i].startPage = 0;
-                machine->slotInfo[i].pageCount = 16;
-                machine->slotInfo[i].romType = ROM_MSXDOS2;
-                strcpy(machine->slotInfo[i].name, "/bios/msx/MSXDOS23.ROM");
+                machine->slotInfo[i].pageCount = 8;
+                machine->slotInfo[i].romType = ROM_SUNRISEIDE;
+                strcpy(machine->slotInfo[i].name, "/bios/msx/Nextor.rom");
                 i++;
             }
 
@@ -1039,9 +1073,9 @@ static void setPropertiesMsx(Machine *machine, int msxType) {
                 machine->slotInfo[i].slot = 1;
                 machine->slotInfo[i].subslot = 0;
                 machine->slotInfo[i].startPage = 0;
-                machine->slotInfo[i].pageCount = 16;
-                machine->slotInfo[i].romType = ROM_MSXDOS2;
-                strcpy(machine->slotInfo[i].name, "/bios/msx/MSXDOS23.ROM");
+                machine->slotInfo[i].pageCount = 8;
+                machine->slotInfo[i].romType = ROM_SUNRISEIDE;
+                strcpy(machine->slotInfo[i].name, "/bios/msx/Nextor.rom");
                 i++;
             }
 
@@ -1067,7 +1101,7 @@ static void setPropertiesMsx(Machine *machine, int msxType) {
 }
 
 static void createMsxMachine(int msxType) {
-    msxMachine = ahb_calloc(1,sizeof(Machine));
+    msxMachine = calloc(1,sizeof(Machine));
 
     msxMachine->cpu.freqZ80 = 3579545;
     msxMachine->cpu.freqR800 = 7159090;
@@ -1083,12 +1117,33 @@ static void createMsxMachine(int msxType) {
 
     // We need to know which kind of media we will load to
     // load correct configuration
-    if (0 == strcmp(ACTIVE_FILE->ext,MSX_DISK_EXTENSION)) {
+    if (0 == strcmp(ACTIVE_FILE->ext, MSX_DISK_EXTENSION_COMPRESSED)) {
+        strcpy(current_disk_path, ACTIVE_FILE->path);
+        uint8_t cdk_header[8];
+        FILE *file = fopen(ACTIVE_FILE->path, "rb");
+        if (file == NULL) {
+            printf("Failed to open disk image file\n");
+            return;
+        }
+        fread(cdk_header, 1, sizeof(cdk_header), file);
+        fclose(file);
+        printf("cdk_header: %02X %02X %02X %02X %02X %02X %02X %02X\n", cdk_header[0], cdk_header[1], cdk_header[2], cdk_header[3], cdk_header[4], cdk_header[5], cdk_header[6], cdk_header[7]);
+        printf("count %x\n", cdk_header[4]+(cdk_header[5]<<8)+(cdk_header[6]<<16)+(cdk_header[7]<<24));
+        if (cdk_header[4]+(cdk_header[5]<<8)+(cdk_header[6]<<16)+(cdk_header[7]<<24) <= 0x288) {
+            printf("Compressed MSX_GAME_DISK\n");
+            msx_game_type = MSX_GAME_DISK;
+        } else {
+            printf("Compressed MSX_GAME_HDIDE\n");
+            msx_game_type = MSX_GAME_HDIDE;
+        }
+    } else if (0 == strcasecmp(ACTIVE_FILE->ext, MSX_DISK_EXTENSION)) {
         strcpy(current_disk_path, ACTIVE_FILE->path);
         // Find if file is disk image or IDE HDD image
         if (ACTIVE_FILE->size <= 720*1024) {
+            printf("MSX_GAME_DISK\n");
             msx_game_type = MSX_GAME_DISK;
         } else {
+            printf("MSX_GAME_HDIDE\n");
             msx_game_type = MSX_GAME_HDIDE;
         }
     } else {
@@ -1665,13 +1720,20 @@ static void insertGame() {
             printf("Rom Mapper %d\n",mapper);
             if (mapper == ROM_UNKNOWN) {
 #ifndef GNW_DISABLE_COMPRESSION
-                if(strcmp(ROM_EXT, "lzma") == 0) {
-                    mapper = GuessROM((unsigned char *)&_MSX_ROM_UNPACK_BUFFER,rom_decompress_size);
+                if(strcmp(ACTIVE_FILE->ext, "lzma") == 0) {
+                    mapper = GuessROM((unsigned char *)&_MSX_ROM_UNPACK_BUFFER,msx_rom_decompress_size);
                 }
                 else
 #endif
                 {
-                    mapper = GuessROM((uint8_t *)ROM_DATA,ROM_DATA_LENGTH);
+                    uint32_t rom_size;
+                    uint8_t *rom_data = odroid_overlay_cache_file_in_flash(ACTIVE_FILE->path, &rom_size, false);
+                    if (rom_data == NULL) {
+                        return;
+                    }
+                    if (rom_data != NULL) {
+                        mapper = GuessROM(rom_data, rom_size);
+                    }
                 }
             }
             if (!controls_found) {
@@ -1705,6 +1767,7 @@ static void insertGame() {
         }
         case MSX_GAME_DISK:
         {
+            printf("insertDiskette msx game type %d path %s\n", msx_game_type, current_disk_path);
             insertDiskette(properties, 0, current_disk_path, NULL, -1);
 
             // We load SCC-I cartridge for disk games requiring it
@@ -1757,7 +1820,6 @@ static void insertGame() {
         }
         case MSX_GAME_HDIDE:
         {
-            insertCartridge(properties, 0, CARTNAME_SUNRISEIDE, NULL, ROM_SUNRISEIDE, -1);
             insertCartridge(properties, 1, CARTNAME_SNATCHER, NULL, ROM_SNATCHER, -1);
             insertDiskette(properties, 1, current_disk_path, NULL, -1);
             break;
@@ -1795,6 +1857,7 @@ static void createProperties() {
 static void setupEmulatorRessources(int msxType)
 {
     int i;
+    msxYjkColorInit();
     mixer = mixerCreate();
     createProperties();
     createMsxMachine(msxType);
@@ -1873,10 +1936,43 @@ static inline void screen_blit_nn(uint8_t *msx_fb, uint16_t *framebuffer/*int32_
     }
 }
 
+static void draw_disk_icon(void)
+{
+    odroid_display_scaling_t scaling = odroid_display_get_scaling_mode();
+    uint16_t offset;
+    uint16_t *dest;
+    uint16_t idx = 0;
+
+    if (!show_disk_icon)
+        return;
+
+    switch (scaling) {
+    case ODROID_DISPLAY_SCALING_OFF:
+        offset = 272;
+        break;
+    case ODROID_DISPLAY_SCALING_FIT:
+    case ODROID_DISPLAY_SCALING_FULL:
+    case ODROID_DISPLAY_SCALING_CUSTOM:
+        offset = GW_LCD_WIDTH - 26;
+        break;
+    default:
+        return;
+    }
+
+    dest = lcd_get_active_buffer();
+    for (uint8_t i = 0; i < 24; i++) {
+        for (uint8_t j = 0; j < 24; j++) {
+            if (IMG_DISKETTE[idx / 8] & (1 << (7 - idx % 8))) {
+                dest[offset + j + GW_LCD_WIDTH * (2 + i)] = 0xFFFF;
+            }
+            idx++;
+        }
+    }
+}
+
 static void blit(uint8_t *msx_fb, uint16_t *framebuffer)
 {
     odroid_display_scaling_t scaling = odroid_display_get_scaling_mode();
-    uint16_t offset = 274;
 
     switch (scaling) {
     case ODROID_DISPLAY_SCALING_OFF:
@@ -1888,7 +1984,6 @@ static void blit(uint8_t *msx_fb, uint16_t *framebuffer)
     case ODROID_DISPLAY_SCALING_FIT:
     case ODROID_DISPLAY_SCALING_FULL:
     case ODROID_DISPLAY_SCALING_CUSTOM:
-        offset = GW_LCD_WIDTH-26;
         use_overscan = false;
         update_fb_info();
         screen_blit_nn(msx_fb, framebuffer);
@@ -1896,18 +1991,6 @@ static void blit(uint8_t *msx_fb, uint16_t *framebuffer)
     default:
         printf("Unsupported scaling mode %d\n", scaling);
         break;
-    }
-    if (show_disk_icon) {
-        uint16_t *dest = lcd_get_active_buffer();
-        uint16_t idx = 0;
-        for (uint8_t i = 0; i < 24; i++) {
-            for (uint8_t j = 0; j < 24; j++) {
-            if (IMG_DISKETTE[idx / 8] & (1 << (7 - idx % 8))) {
-                dest[offset + j + GW_LCD_WIDTH * (2 + i)] = 0xFFFF;
-            }
-            idx++;
-            }
-        }
     }
 }
 
@@ -1939,9 +2022,7 @@ void app_main_msx(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
     bool drawFrame;
 
     // Set maximum clock speed for better performance if CPU is not overclocked
-    if (odroid_settings_cpu_oc_level_get() == 0) {
-        SystemClock_Config(2);
-    }
+    msx_apply_cpu_clock();
 
     show_disk_icon = false;
 
@@ -1974,7 +2055,7 @@ void app_main_msx(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
     audio_clear_buffers();
 
     // Get game info from sha1 and database file
-    if (!msx_get_game_info(ACTIVE_FILE->path, &game_info)) {
+    if (!msx_get_game_info(ACTIVE_FILE, &game_info)) {
         game_info.mapper = ROM_UNKNOWN;
         game_info.button_profile = 0x7F;
         game_info.ctrl_required = false;
@@ -1982,25 +2063,10 @@ void app_main_msx(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
         printf("Game info found mapper %d profile %d ctrl %d\n", game_info.mapper, game_info.button_profile, game_info.ctrl_required);
     }
 
-#ifndef GNW_DISABLE_COMPRESSION
 /* To reserve correct amount of RAM for decompressing game   */
     /* We have to decompress game ROM in ram now (if compressed) */
     /* It will allow to correctly dynamically allocate ram for   */
     /* different usages (like MSX RAM)                           */
-    if(strcmp(ROM_EXT, "lzma") == 0)
-    {
-        unsigned char *dest = (unsigned char *)&_MSX_ROM_UNPACK_BUFFER;
-        rom_decompress_size = lzma_inflate((unsigned char *)&_MSX_ROM_UNPACK_BUFFER,
-                                           (uint32_t)&_MSX_ROM_UNPACK_BUFFER_SIZE,
-                                           (uint8_t *)ROM_DATA,
-                                           ROM_DATA_LENGTH);
-        ram_start = (uint32_t)dest + rom_decompress_size;
-    }
-    else
-#endif
-    {
-        ram_start = (uint32_t)&_MSX_ROM_UNPACK_BUFFER;
-    }
 
     setupEmulatorRessources(selected_msx_index);
 
@@ -2009,7 +2075,12 @@ void app_main_msx(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
     if (load_state) {
         odroid_system_emu_load_state(save_slot);
 
-        if (strlen(current_disk_path) > 0) {
+        /* Remount the disk image only for floppy (.dsk) games. The HDD is on
+         * drive 1 (Sunrise/Nextor IDE); remounting drive 0 used to mount the
+         * HD image on the floppy slot and desync the IDE state restored from
+         * the save. For IDE games the image is already open from insertGame()
+         * before load — remounting would flush disk caches mid-transfer. */
+        if (msx_game_type == MSX_GAME_DISK && strlen(current_disk_path) > 0) {
             emulatorSuspend();
             insertDiskette(properties, 0, current_disk_path, NULL, -1);
             emulatorResume();
@@ -2037,14 +2108,17 @@ void app_main_msx(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
 
         drawFrame = common_emu_frame_loop();
 
-        void _blit()
+        void _blit_frame(void)
         {
-            // If current MSX screen mode is 10 or 12, data has been directly written into
-            // framebuffer (scaling is not possible for these screen modes), elseway apply
-            // current scaling mode
-            if ((vdpGetScreenMode() != 10) && (vdpGetScreenMode() != 12)) {
+            // Modes 10/11/12: RGB565 written directly by the VDP (no palette blit)
+            if ((vdpGetScreenMode() != 10) && (vdpGetScreenMode() != 11) && (vdpGetScreenMode() != 12)) {
                 blit(msx_framebuffer, lcd_get_active_buffer());
             }
+        }
+
+        void _blit(void)
+        {
+            _blit_frame();
             common_ingame_overlay();
         }
 
@@ -2058,10 +2132,18 @@ void app_main_msx(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
         ((R800*)boardInfo.cpuRef)->terminate = 0;
         boardInfo.run(boardInfo.cpuRef);
 
-        if (drawFrame) {
-            _blit();
-            lcd_swap();
-        }
+        /* Modes 10/11/12 render RGB565 straight into the LCD back buffer
+         * (frameBufferGetLine16). Gwenesis always lcd_swap() even when skipping
+         * line render; MSX must do the same or the panel stays on a stale front
+         * buffer while emulation keeps updating the back buffer. */
+        if (drawFrame)
+            _blit_frame();
+        /* Overlay after emulation: run() overwrites any HUD drawn in input_loop,
+         * and _blit_frame() is skipped on frameskip — still show volume/brightness. */
+        if (common_emu_state.overlay != INGAME_OVERLAY_NONE)
+            common_ingame_overlay();
+        draw_disk_icon();
+        lcd_swap();
 
         // Render audio
         mixerSyncGNW(mixer,(AUDIO_MSX_SAMPLE_RATE/msx_fps));

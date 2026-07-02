@@ -41,4 +41,7 @@ screenshot.png
 .idea/
 cmake-build-debug
 .gitignore.local
+choices.yaml
+build-error.log
+.bash_history
 *.sfc

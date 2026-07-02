@@ -1,11 +1,3 @@
-#if !defined (INCLUDED_ZH_TW)
-#define INCLUDED_ZH_TW 0
-#endif
-#if !defined (CHEAT_CODES)
-#define CHEAT_CODES 0
-#endif
-#if INCLUDED_ZH_TW==1
-
 // Stand 繁體中文
 
 int zh_tw_fmt_Title_Date_Format(char *outstr, const char *datefmt, uint16_t day, uint16_t month, const char *weekday, uint16_t hour, uint16_t minutes, uint16_t seconds)
@@ -23,6 +15,8 @@ int zh_tw_fmt_Time(char *outstr, const char *timefmt, uint16_t hour, uint16_t mi
     return sprintf(outstr, timefmt, hour, minutes, seconds);
 };
 
+// do not compile this part, it will be parsed by a script to create a bin file with language content
+#ifdef DO_NOT_COMPILE
 const lang_t lang_zh_tw LANG_DATA = {
     .codepage = 950,
     .s_LangUI = "語言",

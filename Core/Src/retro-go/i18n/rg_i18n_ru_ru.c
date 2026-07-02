@@ -1,7 +1,3 @@
-#if !defined (INCLUDED_RU_RU)
-#define INCLUDED_RU_RU 1
-#endif
-#if INCLUDED_RU_RU == 1
 //#include "rg_i18n_lang.h"
 //Stand Russian
 
@@ -21,6 +17,8 @@ int ru_ru_fmt_Time(char *outstr, const char *timefmt, uint16_t hour, uint16_t mi
     return sprintf(outstr, timefmt, hour, minutes, seconds);
 };
 
+// do not compile this part, it will be parsed by a script to create a bin file with language content
+#ifdef DO_NOT_COMPILE
 const lang_t lang_ru_ru LANG_DATA = {
     .codepage = 1251,
     .s_LangUI = "Язык",

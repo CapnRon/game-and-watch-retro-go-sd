@@ -1,8 +1,3 @@
-#if !defined (INCLUDED_KO_KR)
-#define INCLUDED_KO_KR 0
-#endif
-#if INCLUDED_KO_KR==1
-
 int ko_kr_fmt_Title_Date_Format(char *outstr, const char *datefmt, uint16_t day, uint16_t month, const char *weekday, uint16_t hour, uint16_t minutes, uint16_t seconds)
 {
     return sprintf(outstr, datefmt, day, month, weekday, hour, minutes, seconds);
@@ -18,6 +13,8 @@ int ko_kr_fmt_Time(char *outstr, const char *timefmt, uint16_t hour, uint16_t mi
     return sprintf(outstr, timefmt, hour, minutes, seconds);
 };
 
+// do not compile this part, it will be parsed by a script to create a bin file with language content
+#ifdef DO_NOT_COMPILE
 const lang_t lang_ko_kr LANG_DATA = {
     .codepage = 949,
     .s_LangUI = "언어",

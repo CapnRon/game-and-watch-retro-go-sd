@@ -1,7 +1,3 @@
-#if !defined (INCLUDED_PT_PT)
-#define INCLUDED_PT_PT 1
-#endif
-#if INCLUDED_PT_PT==1
 //#include "rg_i18n_lang.h"
 // European Portuguese
 
@@ -21,6 +17,8 @@ int pt_pt_fmt_Time(char *outstr, const char *timefmt, uint16_t hour, uint16_t mi
     return sprintf(outstr, timefmt, hour, minutes, seconds);
 };
 
+// do not compile this part, it will be parsed by a script to create a bin file with language content
+#ifdef DO_NOT_COMPILE
 const lang_t lang_pt_pt LANG_DATA = {
     .codepage = 1252,
     .s_LangUI = "Idioma",

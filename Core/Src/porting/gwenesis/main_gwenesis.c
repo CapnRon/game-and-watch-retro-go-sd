@@ -48,6 +48,7 @@ __license__ = "GPLv3"
 #include "gwenesis_vdp.h"
 #include "gwenesis_savestate.h"
 #include "gwenesis_sram.h"
+#include "gw_malloc.h"
 
 #pragma GCC optimize("Ofast")
 
@@ -499,7 +500,7 @@ void gwenesis_save_local_data(FILE *file) {
   fwrite((unsigned char *)&PAD_B_def, 4, 1, file);
   fwrite((unsigned char *)&PAD_C_def, 4, 1, file);
   fwrite((unsigned char *)&gwenesis_lpfilter, 4, 1, file);
-  /* v2: active region code (0=USA, 1=Europe, 2=Japan) */
+  // v2: active region code (0=USA, 1=Europe, 2=Japan)
   fwrite((unsigned char *)&gwenesis_pending_region, 4, 1, file);
 }
 
@@ -604,23 +605,40 @@ static void gwenesis_system_SramSave()
     gwenesis_sram_save();
 }
 
+/* gw_sleep() restores the *settings* OC level on wake, but Genesis forces the
+ * maximum OC during gameplay when the user left the setting at 0.  Without this
+ * the game keeps running at the (slower) settings clock after a sleep/wake
+ * cycle.  Re-apply the boost and reinit audio (SystemClock_Config also
+ * reprograms the audio PLL). */
+static void gwenesis_sleep_wake_up()
+{
+    if (odroid_settings_cpu_oc_level_get() == 0) {
+        SystemClock_Config(2);
+        odroid_audio_init(odroid_audio_sample_rate_get());
+        audio_start_playing_full_length(audio_get_buffer_full_length());
+    }
+}
+
 /* Main */
 int app_main_gwenesis(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
 {
 
     printf("Genesis start\n");
 
-    // Set maximum clock speed for better performance if CPU is not overclocked
+    ram_start = (uint32_t)&_OVERLAY_MD_BSS_END;
+
+    // Set medium clock speed for better performance if CPU is not overclocked
+    // Maximum speed could cause random crash so it should not be used
     if (odroid_settings_cpu_oc_level_get() == 0) {
       SystemClock_Config(2);
   }
 
     odroid_system_init(APPID_MD, GWENESIS_AUDIO_FREQ_NTSC);
     odroid_system_emu_init(&gwenesis_system_LoadState,
-                           &gwenesis_system_SaveState, 
+                           &gwenesis_system_SaveState,
                            &gwenesis_system_Screenshot,
                            NULL,
-                           NULL,
+                           &gwenesis_sleep_wake_up,
                            &gwenesis_system_SramSave);
    // rg_app_desc_t *app = odroid_system_get_app();
 
@@ -678,7 +696,7 @@ int app_main_gwenesis(uint8_t load_state, uint8_t start_paused, int8_t save_slot
     gwenesis_vdp_set_buffer(&screen[0]);
     extern unsigned char gwenesis_vdp_regs[0x20];
     extern unsigned short gwenesis_vdp_status;
-    extern unsigned int screen_width, screen_height;
+    extern int screen_width, screen_height;
     extern int hint_pending;
     volatile unsigned int current_frame;
 
@@ -789,13 +807,6 @@ int app_main_gwenesis(uint8_t load_state, uint8_t start_paused, int8_t save_slot
                            STATUS_VBLANK);
       gwenesis_vdp_status ^= STATUS_ODDFRAME;
 
-      if (hint_counter == 0) {
-        hint_pending = 1;
-        if (REG0_LINE_INTERRUPT &&
-            (gwenesis_vdp_status & STATUS_VIRQPENDING) == 0)
-          m68k_update_irq(4);
-      }
-
       /* First vblank line (=VINT), with optional delay before IRQ. */
       scan_line = screen_height;
       if (!skip_first_vint) {
@@ -817,30 +828,21 @@ int app_main_gwenesis(uint8_t load_state, uint8_t start_paused, int8_t save_slot
         system_clock += VDP_CYCLES_PER_LINE;
       }
 
-      /* Last vblank line: reload H-INT counter, clear VBLANK flag.
-       * Also fire H-INT here when the counter underflows (clownmdemu
-       * "scanline -1") so line-0 raster handlers run before render_line(0). */
+      /* Last vblank line: reload H-INT counter, clear VBLANK (GPGX). */
       scan_line = lines_per_frame - 1;
       hint_counter = (int)REG10_LINE_COUNTER;
       gwenesis_vdp_status &= (unsigned short)~STATUS_VBLANK;
-      if (--hint_counter < 0) {
-        hint_pending = 1;
-        if (REG0_LINE_INTERRUPT &&
-            (gwenesis_vdp_status & STATUS_VIRQPENDING) == 0)
-          m68k_update_irq(4);
-        hint_counter = (int)REG10_LINE_COUNTER;
-      }
       gwenesis_run_cpus_to(system_clock + VDP_CYCLES_PER_LINE);
       system_clock += VDP_CYCLES_PER_LINE;
 
       /* Active display (H-INT before CPU run for each line). */
       for (line = 0; line < (int)screen_height; line++) {
         scan_line = (unsigned int)line;
+        gwenesis_vdp_latch_line_scroll(line);
         if (hint_counter == 0) {
           hint_counter = (int)REG10_LINE_COUNTER;
           hint_pending = 1;
-          if (REG0_LINE_INTERRUPT &&
-              (gwenesis_vdp_status & STATUS_VIRQPENDING) == 0)
+          if (REG0_LINE_INTERRUPT)
             m68k_update_irq(4);
         } else {
           hint_counter--;
