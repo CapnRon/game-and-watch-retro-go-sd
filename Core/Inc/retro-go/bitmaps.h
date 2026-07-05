@@ -65,6 +65,8 @@ enum {
     RG_LOGO_TAMA,
     // PICO-8 (appended last to not shift any existing enum values)
     RG_LOGO_HEADER_PICO8,
+    // PC Engine CD name header (appended last in rg_logos.c / logo.bin)
+    RG_LOGO_HEADER_PCECD,
 };
 
 void odroid_overlay_draw_logo(uint16_t x_pos, uint16_t y_pos, int16_t logo_idx, uint16_t color);
@@ -98,6 +100,7 @@ extern const retro_logo_image header_tama;
 extern const retro_logo_image header_pkmini;
 extern const retro_logo_image header_lynx;
 extern const retro_logo_image header_pico8;
+extern const retro_logo_image header_pcecd;
 
 extern const retro_logo_image pad_sg1000;
 extern const retro_logo_image pad_col;
