@@ -2,6 +2,11 @@
 #include <odroid_system.h>
 #include <odroid_overlay.h>
 
+/* Explicit-fb battery draw (Core/Src/porting/odroid_overlay.c). Declared here
+ * rather than in odroid_overlay.h — that header lives in the retro-go-stm32
+ * submodule, which must stay pristine. */
+void odroid_overlay_draw_battery_to(void *fb, odroid_battery_state_t battery, int x, int y);
+
 #include <string.h>
 #include "main.h"
 #include "bitmaps.h"
@@ -680,7 +685,7 @@ void common_ingame_overlay_to(pixel_t *fb) {
     uint16_t percentage = battery_state.percentage;
     if (percentage <= 15) {
         if ((get_elapsed_time() % 1000) < 300)
-            odroid_overlay_draw_battery(battery_state, 150, 90); 
+            odroid_overlay_draw_battery_to(fb, battery_state, 150, 90);
     }
     
     switch(common_emu_state.overlay)
