@@ -578,6 +578,11 @@ INCLUDE build/fceumm_mappers.ld
     _EARTHBOUND_AHB_BSS_START = .;
     build/earthbound/entity.o (.bss .bss* COMMON)
     build/earthbound/map_loader.o (.bss .bss* COMMON)
+    /* Audio stereo scratch (2.1 KB): CPU-only (written by
+     * audio_generate_samples, read once per sample by the mono mix loop —
+     * no DMA), so the uncached AHB penalty is ~tens of µs/frame. Moved here
+     * to keep ~2 KB of RAM_EMU headroom for the audio heap assert. */
+    build/earthbound/gw_audio.o (.bss.eb_stereo_scratch)
     . = ALIGN(4);
     _EARTHBOUND_AHB_BSS_END = .;
   } > AHBRAM

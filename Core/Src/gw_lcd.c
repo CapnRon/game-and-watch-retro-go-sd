@@ -215,6 +215,11 @@ void HAL_LTDC_LineEventCallback (LTDC_HandleTypeDef *hltdc) {
   HAL_LTDC_ProgramLineEvent(hltdc,  239);
 }
 
+uint32_t lcd_is_tb_mode(void)
+{
+  return tb_mode;
+}
+
 uint32_t lcd_is_swap_pending(void)
 {
   return (uint32_t) ((hltdc.Instance->SRCR) & (LTDC_SRCR_VBR | LTDC_SRCR_IMR));
