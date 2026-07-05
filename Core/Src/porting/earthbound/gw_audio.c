@@ -88,6 +88,12 @@ static volatile uint16_t eb_ring_tail;  /* consumer (SAI ISR) writes */
  * in eb_audio_pump). Written by the ISR, read by the main loop. */
 static volatile uint32_t eb_underrun_frames;
 
+/* Diagnostic: DWT cycles spent generating+mixing audio (excludes the WFI
+ * pacing wait in eb_audio_pump). Read via GDB: cycles_acc / frames_acc =
+ * average APU cost per produced frame. Non-static so the symbol survives. */
+volatile uint32_t eb_audio_prod_cycles;
+volatile uint32_t eb_audio_prod_frames;
+
 static inline uint16_t eb_ring_count(void)
 {
     return (uint16_t)(eb_ring_head - eb_ring_tail);
@@ -178,6 +184,7 @@ void platform_audio_unlock(void) {}
  * caller's rate of calling this == the music's playback rate. */
 static void eb_produce_frame(void)
 {
+    uint32_t _t0 = DWT->CYCCNT;
     int16_t *dst = eb_ring[eb_ring_head & EB_RING_MASK];
 
     if (common_emu_sound_loop_is_muted()) {
@@ -203,6 +210,9 @@ static void eb_produce_frame(void)
      * observes. */
     __DMB();
     eb_ring_head++;
+
+    eb_audio_prod_cycles += DWT->CYCCNT - _t0;
+    eb_audio_prod_frames++;
 }
 
 void eb_audio_pump(void)

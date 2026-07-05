@@ -1268,6 +1268,12 @@ $(BUILD_DIR)/earthbound/compressor.o \
 $(BUILD_DIR)/earthbound/decompressor.o \
 $(BUILD_DIR)/earthbound/state_dump.o: EARTHBOUND_OBJ_OPT := -Os
 
+# NB: -O3 on the lakesnes APU files (apu/dsp/spc, ~9 ms/frame of audio
+# generation at -O2) was tried and does NOT fit: +3.8 KB (dsp) / +0.7 KB
+# (apu) of .text overflows the RAM_EMU audio-heap margin (~2.3 KB) and
+# trips the __EARTHBOUND_MIN_RAM_HEAP__ link assert. Revisit only with
+# freed RAM or a per-function optimize attribute on dsp_cycle.
+
 # embedded_assets_array.c is special: INCBIN_OUTPUT_SECTION routes the 3 MB
 # of asset bytes into .rodata_assets (caught by .rodata_earthbound in the
 # linker script and extracted to earthbound.ro), and EBASSET_TABLE_ATTR
