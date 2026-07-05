@@ -244,6 +244,32 @@ void eb_video_repaint_active(void)
  * window_bits=8, with the slack going to chunkier SD staging. */
 void *platform_savestate_scratch(size_t *out_bytes)
 {
+    tb_ensure_init();
+
+    /* eb_fb3 must be wholly OFF-SCREEN before the compressor scribbles in
+     * it. The quick-save path has no menu present in between, so the last
+     * EB frame — 1-in-3 chance eb_fb3 — can still be displayed, latch-
+     * pending, or (with the deferred-present path) parked un-issued in
+     * tb_queued; lending it then puts compressor scratch on the panel (or
+     * queues a garbage frame). Drain the pipeline, then if fb3 ended up
+     * displayed, re-present the next-most-recent frame and wait for its
+     * latch. Costs at most ~2 vblanks, once per save/load. */
+    while (tb_queued) {
+        eb_video_service();
+        if (tb_queued) {
+            wdog_refresh();
+            __WFI();
+        }
+    }
+    lcd_sleep_while_swap_pending();
+    if (lcd_get_displayed_buffer() == (void *)eb_fb3) {
+        /* Pipeline drained: displayed == last presented == tb_buf[tb_draw+2].
+         * tb_buf[(tb_draw+1)%3] holds the frame drawn just before it (one
+         * frame older, and fb1/fb2 since fb3 is the displayed one). */
+        lcd_present_at_vblank(tb_buf[(tb_draw + 1) % 3]);
+        lcd_sleep_while_swap_pending();
+    }
+
     if (out_bytes)
         *out_bytes = sizeof(eb_fb3);
     return eb_fb3;

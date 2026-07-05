@@ -109,3 +109,19 @@ arm-none-eabi-objdump -dr --disassemble=scroll_window_up.part.0 build/earthbound
 make GNW_TARGET=mario INTFLASH_BANK=2 flash_saves_backup    # device -> backup/
 make GNW_TARGET=mario INTFLASH_BANK=2 flash_saves_restore   # backup/ -> device
 ```
+
+## Debug-rig gotchas (learned the hard way)
+
+- **`make flash` says "No rule to make target 'flash'" while OpenOCD holds the
+  probe** — the Makefile only defines flash targets when adapter detection
+  succeeds. Kill the debugger first:
+  `pkill -f "gnwmanager gdbserver"; pkill -f openocd`.
+  (The same error also appears if make runs from the wrong cwd, e.g. inside
+  `external/earthbound`.)
+- **`arm-none-eabi-gdb -batch ... -ex detach` can leave the target HALTED**
+  (game frozen, counters stop). Verify/recover via the OpenOCD tcl port 6666:
+  `targets` shows the state, `resume` fixes it. For plain memory reads prefer
+  tcl `halt` / `mdw` / `resume` — it never wedges.
+- **Never pipe a build through `head`** — when `head` exits it SIGPIPE-kills
+  make mid-link, and an `&&`-chained `sdpush` then pushes stale binaries.
+  Redirect to a log file and grep/tail that instead.
