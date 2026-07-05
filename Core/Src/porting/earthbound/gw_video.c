@@ -50,6 +50,24 @@ static uint16_t eb_fb3[GW_LCD_WIDTH * GW_LCD_HEIGHT] __attribute__((aligned(32))
 static uint16_t *tb_buf[3];
 static int tb_draw = -1;   /* index of the buffer the CPU is currently drawing */
 
+/* Finished frame waiting for the previous present to latch at vblank before
+ * it can be handed to the LTDC. end_frame used to block on that latch
+ * (lcd_sleep_while_swap_pending) — at 60 fps that put the vblank wait on the
+ * frame loop's critical path IN ADDITION to the audio ring's DMA-half wait,
+ * two independent ~16.7 ms clocks whose waits summed and pushed a fitting
+ * frame over budget (30 fps snap). Instead the present is queued here and
+ * issued opportunistically from eb_video_service(), which the audio pump's
+ * WFI wait loop polls — the vblank wait overlaps the audio wait. */
+static uint16_t *tb_queued;
+
+void eb_video_service(void)
+{
+    if (tb_queued && !lcd_is_swap_pending()) {
+        lcd_present_at_vblank(tb_queued);
+        tb_queued = NULL;
+    }
+}
+
 static void tb_ensure_init(void)
 {
     if (tb_draw >= 0) return;
@@ -70,6 +88,18 @@ void platform_video_shutdown(void) {}
 void platform_video_begin_frame(void)
 {
     tb_ensure_init();
+    /* The draw target selected at the previous end_frame is only guaranteed
+     * free once the queued present has been issued (issuing requires the
+     * present before it to have latched, which releases a buffer). The audio
+     * pump's wait loop usually services this long before we get here; block
+     * only on phase misalignment between the SAI and LTDC clocks. */
+    while (tb_queued) {
+        eb_video_service();
+        if (tb_queued) {
+            wdog_refresh();
+            __WFI();
+        }
+    }
 }
 
 void platform_video_send_scanline(int y, const pixel_t *pixels)
@@ -109,27 +139,20 @@ void platform_video_end_frame(void)
         SCB_CleanDCache_by_Addr((uint32_t *)eb_fb3, sizeof(eb_fb3));
     }
 
-    /* Don't queue a new present while the previous one is still waiting for its
-     * vblank latch. When two frames complete within a single 60Hz refresh
-     * (light scenes, menus, title screens — render < ~16.7ms), the second
-     * lcd_present_at_vblank() would overwrite the still-pending address and
-     * orphan a buffer; the round-robin below could then hand that buffer back
-     * as the next draw target right as the vblank scans it out — a 1-frame
-     * tear/black flash. Waiting here bounds the pipeline to exactly one present
-     * per refresh in FIFO order, which is what makes the rotation below
-     * provably race-free. It only blocks when we're already ahead of the
-     * refresh, so the ~25fps overworld path — where the prior present latched a
-     * full refresh ago — never waits. */
-    lcd_sleep_while_swap_pending();
+    /* Never hold two un-latched presents: while the previous present is still
+     * waiting for its vblank latch, this buffer is parked in tb_queued and
+     * issued later by eb_video_service() (audio-pump wait loop or the next
+     * begin_frame) — presents stay one-per-refresh and FIFO-ordered without
+     * blocking the frame loop here. If nothing is pending, present now. */
+    tb_queued = drawn;
+    eb_video_service();
 
-    /* Queue this fully-drawn buffer for a tear-free swap at the next vblank. */
-    lcd_present_at_vblank(drawn);
-
-    /* Next draw target: strict round-robin. With at most one present pending
-     * (guaranteed by the wait above) the buffers are in a known state — buf
-     * [tb_draw] is now pending and buf[tb_draw-1] is displayed — so
-     * buf[(tb_draw+1)%3] is always the third, free buffer. No read of the live
-     * displayed address, so no select-vs-vblank race. */
+    /* Next draw target: strict round-robin. With presents FIFO-ordered and at
+     * most one hw-pending + one sw-queued (both guaranteed above), buf
+     * [(tb_draw+1)%3] is free by the time begin_frame allows drawing into it:
+     * begin_frame blocks until tb_queued was issued, which requires the
+     * previous present to have latched and released its predecessor. No read
+     * of the live displayed address, so no select-vs-vblank race. */
     tb_draw = (tb_draw + 1) % 3;
 
 #ifdef EB_PPU_PROFILE

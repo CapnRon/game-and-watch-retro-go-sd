@@ -55,6 +55,8 @@
 #include "porting/common.h"
 
 extern void wdog_refresh(void);
+/* gw_video.c — issues a deferred LCD present once the previous one latched. */
+extern void eb_video_service(void);
 
 #define EB_AUDIO_SAMPLES_PER_FRAME 534  /* 32000 / 60 ≈ 533.33 */
 
@@ -236,8 +238,13 @@ void eb_audio_pump(void)
      *   long. */
     while (eb_ring_count() >= EB_RING_FRAMES) {
         wdog_refresh();
+        /* Issue any deferred LCD present (gw_video.c) — the vblank latch we
+         * would otherwise block on in end_frame passes during this wait, so
+         * the video and audio waits overlap instead of summing. */
+        eb_video_service();
         cpumon_sleep();  /* __WFI; wakes on the SAI ISR that frees a slot */
     }
+    eb_video_service();
 
     uint16_t want = (uint16_t)(EB_RING_FRAMES - eb_ring_count());
     for (uint16_t i = 0; i < want; i++)
