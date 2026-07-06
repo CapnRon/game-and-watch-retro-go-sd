@@ -28,10 +28,6 @@
 #include "gw_malloc.h"
 
 //#define PCE_SHOW_DEBUG
-//#define XBUF_WIDTH 	(480 + 32)
-//#define XBUF_HEIGHT	(242 + 32)
-//#define GW_LCD_WIDTH  (320)
-//#define GW_LCD_HEIGHT (240)
 #define FPS_NTSC 60
 /* PC Engine CD: the boot ROM is the (user-supplied, copyrighted) System Card.
  * Super System Card 3.0 covers base + Super CD-ROM2 titles. The dump is a raw
@@ -46,7 +42,8 @@ static const char *const PCE_SYSCARD_BIOS_PATHS[] = {
 /* Mounted PCE-CD disc table-of-contents (kept for the SCSI target's lifetime). */
 static pce_cd_toc_t s_pcecd_toc;
 
-#define FB_INTERNAL_OFFSET (((XBUF_HEIGHT - current_height) / 2 + 16) * XBUF_WIDTH + (XBUF_WIDTH - current_width) / 2)
+#define FB_INTERNAL_OFFSET_X  (((XBUF_WIDTH - current_width) / 2) > 0 ? ((XBUF_WIDTH - current_width) / 2) : 0)
+#define FB_INTERNAL_OFFSET    (((XBUF_HEIGHT - current_height) / 2 + 16) * XBUF_WIDTH + FB_INTERNAL_OFFSET_X)
 #define AUDIO_BUFFER_LENGTH_PCE  (PCE_SAMPLE_RATE / FPS_NTSC)
 #define JOY_A       0x01
 #define JOY_B       0x02
@@ -60,9 +57,9 @@ static pce_cd_toc_t s_pcecd_toc;
 #define COLOR_RGB(r, g, b) ((((r) << 13) & 0xf800) + (((g) << 8) & 0x07e0) + (((b) << 3) & 0x001f))
 
 static uint16_t mypalette[256];
-static int current_height, current_width;
+static int current_height = 224, current_width = 256;
 static short audioBuffer_pce[ AUDIO_BUFFER_LENGTH_PCE * 2];
-static uint8_t pce_framebuffer[XBUF_WIDTH * XBUF_HEIGHT * 2];
+static uint8_t pce_framebuffer[XBUF_WIDTH * XBUF_HEIGHT];
 /* Borrowed for CD-RAM banks (idle on CD; Populous HuCard uses only the first 0x8000).
  * NOTE: 32KB only. Growing this to fit big Super-CD games (Dynastic Hero ~232KB needs
  * 32 banks) links OK but at runtime the extra overlay BSS starves the PCE heap and ALL
@@ -122,7 +119,7 @@ static const struct
 
 	// VDC
 	SVAR_A("vdc_regs", PCE.VDC.regs),           SVAR_1("vdc_reg", PCE.VDC.reg),
-	SVAR_1("vdc_status", PCE.VDC.status),       SVAR_1("vdc_satb", PCE.VDC.vram),
+	SVAR_1("vdc_status", PCE.VDC.status),       SVAR_1("vdc_vram", PCE.VDC.vram),
 	SVAR_1("vdc_satb", PCE.VDC.satb),			SVAR_4("vdc_pen_irqs", PCE.VDC.pending_irqs),
 
 	// Timer
@@ -636,7 +633,12 @@ void LoadCartPCE() {
             PCE.MemoryMapW[v] = p;
         }
         if (from_exram) memset(PCE_EXRAM_BUF, 0, (uint32_t)from_exram * PCE_CD_RAM_BANK_SIZE);
-        if (mapped > from_exram) memset(buf, 0, (uint32_t)(mapped - from_exram) * PCE_CD_RAM_BANK_SIZE);
+        if (buf_banks > 0) {
+            uint32_t clear_sz = (uint32_t)buf_banks * PCE_CD_RAM_BANK_SIZE;
+            if (clear_sz > room)
+                clear_sz = room;
+            memset(buf, 0, clear_sz);
+        }
         /* STILL short of the full 32 banks (unpack ~174KB=21 + EXRAM 32KB=4 = 25 on
          * device, so 7 banks/56KB missing)? Borrow the save-state staging buffer
          * (save_buffer, SAVE_STATE_BUFFER_SIZE ~78KB). It is touched ONLY during
@@ -710,6 +712,22 @@ static void blit() {
     int y=0, offsetY, offsetX = 0, cropX = 0;
     int xScale = 0;
     uint8_t *fbTmp;
+
+    if (scaling == ODROID_DISPLAY_SCALING_FULL) {
+        /* Stretch BOTH axes to fill the screen, like the other cores' FULL mode.
+         * Without the Y stretch, 224-line games (most CD titles) leave 8px black
+         * bars top and bottom. Nearest-neighbour: 224->240 repeats 1 row in 15. */
+        xScale = (current_width << 8) / GW_LCD_WIDTH;
+        int yScale = (current_height << 8) / GW_LCD_HEIGHT;
+        for (y = 0; y < GW_LCD_HEIGHT; y++) {
+            fbTmp = emuFrameBuffer + ((y * yScale) >> 8) * XBUF_WIDTH;
+            pixel_t *dst = framebuffer_active + y * GW_LCD_WIDTH;
+            for (int x = 0; x < GW_LCD_WIDTH; x++) {
+                dst[x] = mypalette[fbTmp[(x * xScale) >> 8]];
+            }
+        }
+        return;
+    }
 
     if (scaling != ODROID_DISPLAY_SCALING_OFF ) {
         xScale = (current_width << 8) / GW_LCD_WIDTH ;
@@ -843,6 +861,23 @@ void pce_pcm_submit() {
     }
 }
 
+static void apply_cpu_clock(void)
+{
+    /* PCE-CD only: auto-OC level 2 (353MHz, the max the firmware/menu offers —
+     * same level VB uses) for the extra CD load: SCSI engine + CD-DA
+     * fseek/fread/4-tap + ADPCM on top of the core. HuCard runs full speed at
+     * stock so it stays at the user's clock. Same VB pattern: NOT persisted
+     * (exit resets the clock), no-op on OSPI1 SD hardware (guarded inside). The
+     * actual clock is proven in /pcecd_diag.txt at disc mount ("clock=... MHz"). */
+     if (ACTIVE_FILE && ACTIVE_FILE->ext && strcmp(ACTIVE_FILE->ext, "cue") == 0)
+        SystemClock_Config(3);
+}
+
+static void sleep_wake_up()
+{
+    apply_cpu_clock();
+}
+
 int app_main_pce(uint8_t load_state, uint8_t start_paused, int8_t save_slot) {
     if (start_paused) {
         common_emu_state.pause_after_frames = 2;
@@ -851,13 +886,11 @@ int app_main_pce(uint8_t load_state, uint8_t start_paused, int8_t save_slot) {
         common_emu_state.pause_after_frames = 0;
     }
 
-    /* PCE-CD only: OC level 2 when the user left. HuCard keeps the user's clock setting. */
-    if (ACTIVE_FILE && ACTIVE_FILE->ext && strcmp(ACTIVE_FILE->ext, "cue") == 0
-        && odroid_settings_cpu_oc_level_get() == 0)
-        SystemClock_Config(2);
+    // Apply OC if needed
+    apply_cpu_clock();
 
     odroid_system_init(APPID_PCE, PCE_SAMPLE_RATE);
-    odroid_system_emu_init(&LoadState, &SaveState, &Screenshot, NULL, NULL, NULL);
+    odroid_system_emu_init(&LoadState, &SaveState, &Screenshot, NULL, &sleep_wake_up, NULL);
     pce_log[0]=0;
 
     // Init Graphics
