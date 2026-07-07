@@ -83,9 +83,29 @@ static void pce_state_path(char *out, size_t out_size)
 	snprintf(out, out_size, "%s.state", g_cue_path);
 }
 
-static void pce_bram_path(char *out, size_t out_size)
+static void pce_sram_path(char *out, size_t out_size)
 {
-	snprintf(out, out_size, "%s.bram", g_cue_path);
+	snprintf(out, out_size, "%s.sram", g_cue_path);
+}
+
+static void pce_sram_load(void)
+{
+	if (!g_cue_path) return;
+	pce_bram_init();
+	char path[1024];
+	pce_sram_path(path, sizeof(path));
+	FILE *f = fopen(path, "rb");
+	if (f) { fread(PCE.bram, 1, 0x800, f); fclose(f); }
+	pce_bram_format_if_needed();
+}
+
+static void pce_sram_save(void)
+{
+	if (!g_cue_path) return;
+	char path[1024];
+	pce_sram_path(path, sizeof(path));
+	FILE *f = fopen(path, "wb");
+	if (f) { fwrite(PCE.bram, 1, 0x800, f); fclose(f); }
 }
 
 static void pce_linux_save_state(void)
@@ -267,14 +287,6 @@ static bool host_LoadState(const char *savePathName)
 	osd_gfx_set_mode(IO_VDC_SCREEN_WIDTH, IO_VDC_SCREEN_HEIGHT);
 	fclose(fp);
 
-	if (g_cue_path) {
-		char bram_path[1024];
-		pce_bram_path(bram_path, sizeof(bram_path));
-		FILE *bf = fopen(bram_path, "rb");
-		if (bf) { fread(PCE.bram, 1, 0x800, bf); fclose(bf); }
-		pce_bram_format_if_needed();
-	}
-
 	g_cd_state_loaded = true;
 	printf("Loaded state: %s\n", savePathName);
 	return true;
@@ -311,13 +323,6 @@ static bool host_SaveState(const char *savePathName)
 	}
 
 	fclose(fp);
-
-	if (g_cue_path) {
-		char bram_path[1024];
-		pce_bram_path(bram_path, sizeof(bram_path));
-		FILE *bf = fopen(bram_path, "wb");
-		if (bf) { fwrite(PCE.bram, 1, 0x800, bf); fclose(bf); }
-	}
 
 	printf("Saved state: %s\n", savePathName);
 	return true;
@@ -457,14 +462,8 @@ int InitPCE(int samplerate, bool stereo, const char *huecard)
 			fprintf(stderr, "CD mount FAILED: %s\n", g_cue_path);
 			return 1;
 		}
-		pce_bram_init();
-		{
-			char bram_path[1024];
-			pce_bram_path(bram_path, sizeof(bram_path));
-			FILE *bf = fopen(bram_path, "rb");
-			if (bf) { fread(PCE.bram, 1, 0x800, bf); fclose(bf); }
-		}
-		pce_bram_format_if_needed();
+		/* BRAM: per-game .sram file. */
+		pce_sram_load();
 	}
 
 	gfx_reset(0);
@@ -691,6 +690,7 @@ int main(int argc, char *argv[])
 		frame++;
 	}
 
+	pce_sram_save();
 	SDL_Quit();
 	pce_audio_shutdown();
 	return 0;

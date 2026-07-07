@@ -190,6 +190,36 @@ static void blit();
  * (Cotton) came back with the screen logic dead while CD-DA music (main-loop
  * driven) kept playing. */
 uint8_t save_buffer[SAVE_STATE_BUFFER_SIZE];
+#define PCE_SRAM_SIZE 0x800   /* 2KB usable BRAM (bank $F7 low mirror) */
+
+/* Load per-game BRAM from the standard .sram save file. */
+static void pce_sram_load(void)
+{
+    if (!ACTIVE_FILE || strcmp(ACTIVE_FILE->ext, "cue") != 0) return;
+    pce_bram_init();
+    char *path = odroid_system_get_path(ODROID_PATH_SAVE_SRAM, ACTIVE_FILE->path);
+    FILE *f = fopen(path, "rb");
+    if (f) {
+        fread(PCE.bram, 1, PCE_SRAM_SIZE, f);
+        fclose(f);
+    }
+    free(path);
+    pce_bram_format_if_needed();
+}
+
+/* odroid sram_save callback: exit, sleep, app switch. */
+static void pce_sram_save_cb(void)
+{
+    if (!ACTIVE_FILE || strcmp(ACTIVE_FILE->ext, "cue") != 0) return;
+    char *path = odroid_system_get_path(ODROID_PATH_SAVE_SRAM, ACTIVE_FILE->path);
+    FILE *f = fopen(path, "wb");
+    if (f) {
+        fwrite(PCE.bram, 1, PCE_SRAM_SIZE, f);
+        fclose(f);
+    }
+    free(path);
+}
+
 static bool SaveState(const char *savePathName) {
     size_t pos = 0;
     FILE *file = fopen(savePathName, "wb");
@@ -243,13 +273,6 @@ static bool SaveState(const char *savePathName) {
         fwrite(&sst, sizeof(sst), 1, file);
     }
     fclose(file);
-    /* Persist BRAM to its OWN file (system-wide cabinet, not part of the per-game
-     * snapshot — deliberately absent from SaveStateVars). */
-    if (strcmp(ACTIVE_FILE->ext, "cue") == 0) {
-        odroid_sdcard_mkdir(ODROID_BASE_PATH_SAVES);   /* fresh SD: /data may not exist yet */
-        FILE *bf = fopen(ODROID_BASE_PATH_SAVES "/pcecd.bram", "wb");
-        if (bf) { fwrite(PCE.bram, 1, 0x800, bf); fclose(bf); }
-    }
     if (!written) {
         return false;
     }
@@ -671,14 +694,8 @@ void LoadCartPCE() {
             fclose(cf);
         }
 #endif
-        /* BRAM: map bank $F7, load the shared system-wide cabinet from SD, and
-         * format-init if the file is absent/invalid. Independent of the .state save
-         * and of the 0x68-0x87 CD RAM above. ROM is flash-XIP here, so no other FILE
-         * is open during LoadCartPCE. */
-        pce_bram_init();
-        FILE *bf = fopen(ODROID_BASE_PATH_SAVES "/pcecd.bram", "rb");
-        if (bf) { fread(PCE.bram, 1, 0x800, bf); fclose(bf); }
-        pce_bram_format_if_needed();
+        /* BRAM: per-game .sram file (managed by the launcher like any SRAM). */
+        pce_sram_load();
     }
 }
 
@@ -896,7 +913,7 @@ int app_main_pce(uint8_t load_state, uint8_t start_paused, int8_t save_slot) {
     apply_cpu_clock();
 
     odroid_system_init(APPID_PCE, PCE_SAMPLE_RATE);
-    odroid_system_emu_init(&LoadState, &SaveState, &Screenshot, NULL, &sleep_wake_up, NULL);
+    odroid_system_emu_init(&LoadState, &SaveState, &Screenshot, NULL, &sleep_wake_up, &pce_sram_save_cb);
     pce_log[0]=0;
 
     // Init Graphics
