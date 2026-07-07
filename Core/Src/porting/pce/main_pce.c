@@ -848,13 +848,19 @@ void pce_pcm_submit() {
     int cdda_n  = s_pcecd_cd_audio ? pce_scsi_cdda_fill(cdda_buf, AUDIO_BUFFER_LENGTH_PCE) : 0;
     int adpcm_n = pce_adpcm_fill(adpcm_buf, AUDIO_BUFFER_LENGTH_PCE);   /* in-RAM, cheap: always on */
 
+    uint32_t adpcm_vol = pce_scsi_adpcm_volume();  /* Q16 fader volume for ADPCM */
+
     for (int i = 0; i < sound_buffer_length; i++) {
         /* mix left & right */
         int32_t sample = (audioBuffer_pce[i*2] + audioBuffer_pce[i*2+1]);
         if (cdda_n && i < cdda_n)
-            sample += (cdda_buf[i*2] + cdda_buf[i*2+1]) >> 1;   /* CD-DA is full-scale PCM */
-        if (adpcm_n && i < adpcm_n)
-            sample += adpcm_buf[i*2];                            /* ADPCM is mono (dup L/R) */
+            sample += (cdda_buf[i*2] + cdda_buf[i*2+1]) >> 1;   /* CD-DA already fader-scaled */
+        if (adpcm_n && i < adpcm_n) {
+            int32_t a = adpcm_buf[i*2];
+            if (adpcm_vol < 65536)
+                a = (int32_t)(((int64_t)a * adpcm_vol) >> 16);
+            sample += a;                                         /* ADPCM is mono (dup L/R) */
+        }
         sample = (sample * factor) >> 8;
         if (sample > 32767) sample = 32767; else if (sample < -32768) sample = -32768;
         sound_buffer[i] = sample;

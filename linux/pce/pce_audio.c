@@ -37,12 +37,18 @@ void pce_pcm_submit(void)
 	int cdda_n = pce_scsi_cdda_fill(cdda_buf, AUDIO_BUFFER_LENGTH_PCE);
 	int adpcm_n = pce_adpcm_fill(adpcm_buf, AUDIO_BUFFER_LENGTH_PCE);
 
+	uint32_t adpcm_vol = pce_scsi_adpcm_volume();  /* Q16 fader volume for ADPCM */
+
 	for (int i = 0; i < AUDIO_BUFFER_LENGTH_PCE; i++) {
 		int32_t sample = (int32_t)audioBuffer_pce[i * 2] + (int32_t)audioBuffer_pce[i * 2 + 1];
 		if (cdda_n && i < cdda_n)
 			sample += ((int32_t)cdda_buf[i * 2] + (int32_t)cdda_buf[i * 2 + 1]) >> 1;
-		if (adpcm_n && i < adpcm_n)
-			sample += adpcm_buf[i * 2];
+		if (adpcm_n && i < adpcm_n) {
+			int32_t a = adpcm_buf[i * 2];
+			if (adpcm_vol < 65536)
+				a = (int32_t)(((int64_t)a * adpcm_vol) >> 16);
+			sample += a;
+		}
 		if (sample > 32767)
 			sample = 32767;
 		else if (sample < -32768)
