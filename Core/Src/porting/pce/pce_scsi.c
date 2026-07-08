@@ -665,6 +665,10 @@ static void execute_command(void)
         s_cdda_paused = !s_cdda_play;    /* NEC: SAPSP w/o play = seek then PAUSE */
         diag("  CDDA SAPSP lba=%lu play=%d\n", (unsigned long)s_cdda_lba, s_cdda_play);
         send_status(STATUS_GOOD, 0);
+        /* Some titles wait for DATA_DONE right after SAPSP before consuming the
+         * status phase; mirror the ADPCM-complete path and assert it now. */
+        s_port3 |= IRQ_DATA_DONE;
+        update_irq();
         break;
     case 0xD9: /* SAPEP — set end position + play mode (1=loop 2=int 3=normal 0=stop) */
         s_cdda_end  = cdda_decode_pos(s_cmd);
