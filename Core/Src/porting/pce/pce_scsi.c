@@ -545,14 +545,8 @@ int pce_scsi_cdda_fill(int16_t *out, int frames)
         {
             int16_t l = (int16_t)(s_cdda_sec[s_cdda_pos]     | (s_cdda_sec[s_cdda_pos + 1] << 8));
             int16_t r = (int16_t)(s_cdda_sec[s_cdda_pos + 2] | (s_cdda_sec[s_cdda_pos + 3] << 8));
-            /* Apply CD-DA volume: Mednafen always uses 0.50f * fader (pcecd.cpp L128).
-             * Even at full fader (no fade), CD-DA plays at 50% amplitude to match the
-             * hardware mixing levels. fader=65536 → vol=32768 → >>16 gives >>1. */
-            {
-                uint32_t vol = s_fader_cdda_vol >> 1; /* 0.50f * fader (Mednafen constant) */
-                l = (int16_t)(((int32_t)l * (int32_t)vol) >> 16);
-                r = (int16_t)(((int32_t)r * (int32_t)vol) >> 16);
-            }
+            l = (int16_t)(((int32_t)l * (int32_t)s_fader_cdda_vol) >> 16);
+            r = (int16_t)(((int32_t)r * (int32_t)s_fader_cdda_vol) >> 16);
             out[i * 2]     = l;
             out[i * 2 + 1] = r;
         }
