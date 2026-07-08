@@ -1469,7 +1469,7 @@ $(SD_CONTENT_STAMP): $(BUILD_DIR)/$(TARGET).elf \
 	$(call EXTRACT_INTERNAL_CORE_BIN_WITH_HEADER,.overlay_nes_fceu,$(CORES_DIR)/nes_fceu.bin)
 	$(call EXTRACT_INTERNAL_CORE_BIN_WITH_HEADER,.overlay_tgb,$(CORES_DIR)/tgb.bin)
 	$(call EXTRACT_INTERNAL_CORE_BIN_WITH_HEADER,.overlay_sms,$(CORES_DIR)/sms.bin)
-	$(call EXTRACT_INTERNAL_CORE_BIN_WITH_HEADER,.overlay_pce,$(CORES_DIR)/pce.bin)
+	$(call EXTRACT_INTERNAL_CORE_BIN_WITH_HEADER,.overlay_pce --only-section=.overlay_pce_itc,$(CORES_DIR)/pce.bin)
 	$(call EXTRACT_INTERNAL_CORE_BIN_WITH_HEADER,.overlay_msx,$(CORES_DIR)/msx.bin)
 	$(call EXTRACT_INTERNAL_CORE_BIN_WITH_HEADER,.overlay_wsv,$(CORES_DIR)/wsv.bin)
 	$(call EXTRACT_INTERNAL_CORE_BIN_WITH_HEADER,.overlay_gw,$(CORES_DIR)/gw.bin)
