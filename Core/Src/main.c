@@ -479,13 +479,6 @@ void SystemClock_Config(uint8_t oc_level)
       RCC_OscInitStruct.PLL.PLLQ = 7;
       RCC_OscInitStruct.PLL.PLLR = 2;
       break;
-    case 3: // Maximum overclocking
-      RCC_OscInitStruct.PLL.PLLM = 38;
-      RCC_OscInitStruct.PLL.PLLN = 420;
-      RCC_OscInitStruct.PLL.PLLP = 2;
-      RCC_OscInitStruct.PLL.PLLQ = 7;
-      RCC_OscInitStruct.PLL.PLLR = 2;
-      break;
     default: // No overclocking
       RCC_OscInitStruct.PLL.PLLM = 16;
       RCC_OscInitStruct.PLL.PLLN = 140;

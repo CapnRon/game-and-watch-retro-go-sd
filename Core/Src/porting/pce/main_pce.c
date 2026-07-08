@@ -893,7 +893,7 @@ static void apply_cpu_clock(void)
      * (exit resets the clock), no-op on OSPI1 SD hardware (guarded inside). The
      * actual clock is proven in /pcecd_diag.txt at disc mount ("clock=... MHz"). */
      if (ACTIVE_FILE && ACTIVE_FILE->ext && strcmp(ACTIVE_FILE->ext, "cue") == 0)
-        SystemClock_Config(3);
+        SystemClock_Config(2);
 }
 
 static void sleep_wake_up()
