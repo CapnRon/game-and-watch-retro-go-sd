@@ -313,43 +313,44 @@ static void feed_din(void)
 }
 
 /* ADPCM ($180A-$180D). The System Card loads ADPCM (voice) data straight from CD
- * by issuing a READ(6) then enabling SCSI->ADPCM DMA via $180B bit1; it then polls
- * $180C (ADPCM busy) and $1803 (DATA_DONE) for completion. We don't run a real
- * DMA engine, so the transfer is PUMPED from the main loop (pce_scsi_run), up to
- * 4 sectors (8KB) per frame: the old drain-everything-now path pulled a 64KB FMV
- * load through SD in ONE frame = a 30-55ms single-shot stall (the pacer's worst
- * enemy). Chunked, the same load spreads over ~8 frames — still far faster than
- * the ~430ms a real 1x drive needed, so the BIOS poll loop ($1802/$1803) simply
- * sees "in progress" for a few frames, exactly as on hardware. */
+ * by issuing a READ(6) then enabling SCSI->ADPCM DMA via $180B (val & 0x3; $01
+ * is enough — Mednafen). It then polls $1800/$180B/$1803 for completion. The DMA
+ * is pumped on each $180x read during that poll (Sapphire level load) and in
+ * chunks from pce_scsi_run() for long FMV streams. */
 static bool     s_adpcm_dma_active;
 static uint32_t s_adpcm_dma_total;
 
-static void adpcm_dma_pump(void)
+static void adpcm_dma_try_start(void)
+{
+    /* Mednafen: DMA runs when (_Port[0xb] & 0x3) — bit0 alone ($01) is enough. */
+    if ((s_adpcm_ctrl & 0x03) && s_reading && !s_adpcm_dma_active) {
+        s_adpcm_dma_active = true;
+        s_adpcm_dma_total = 0;
+        /* the bus already PRESENTS the sector's first byte (feed_din ran at
+         * READ execute); rewind so the pump starts from it. */
+        if (s_req && s_din_pos > 0) s_din_pos--;
+    }
+}
+
+static void adpcm_dma_pump(int budget)
 {
     if (!s_adpcm_dma_active) return;
-    int budget = 4 * 2048;                              /* <=4 sectors per frame */
     int b = -1;
-    while (budget > 0 && (b = din_get()) >= 0) {
-        pce_adpcm_dma_byte((uint8_t)b);                 /* CD -> ADPCM RAM */
+    while (budget != 0 && (b = din_get()) >= 0) {
+        pce_adpcm_dma_byte((uint8_t)b);
         s_adpcm_dma_total++;
-        budget--;
+        if (budget > 0) budget--;
     }
-    if (b >= 0) return;                                 /* more next frame */
+    if (b >= 0) return;
     s_adpcm_dma_active = false;
     s_reading = false;
     diag("  ADPCM drain %lu B\n", (unsigned long)s_adpcm_dma_total);
-    /* Completion needs BOTH, in this order, for the System Card's ADPCM-load path:
-     *  - $1803 DATA_DONE set NOW (the transfer-complete IRQ flag the f3d0 loop polls
-     *    BEFORE the status handshake), and
-     *  - the bus presented in STATUS phase ($1800 & $F8 == $D8) so the following
-     *    $E9C5 status-wait can read the result byte and run the normal handshake. */
+    /* Mednafen clears _Port[0xb] bit0 when SCSI STATUS ACK completes (CD high);
+     * Sapphire spins on TST #$01,$180B until that bit drops after the DMA. */
+    s_adpcm_ctrl &= ~0x01u;
     send_status(STATUS_GOOD, 0);
     s_port3 |= IRQ_DATA_DONE;
-    update_irq();   /* refresh IRQ2 with the just-set DATA_DONE: send_status/change_phase
-                       ran update_irq() BEFORE we OR'd DATA_DONE in, so without this the
-                       ADPCM-load-complete IRQ never asserts and the System Card poll-loops
-                       $1802/$1803 forever right after the opening (Dracula X "opening then
-                       stops"). Every other DATA_DONE set refreshes the line via change_phase. */
+    update_irq();
 }
 
 static void do_data_in(const uint8_t *buf, uint32_t len)
@@ -750,13 +751,24 @@ static void ack_deassert(void)
     switch (s_phase) {
     case PH_COMMAND: if (s_cmd_idx >= RequiredCDBLen[s_cmd[0] >> 4]) execute_command(); else s_req = 1; break;
     case PH_DATAIN:  feed_din(); break;  /* advance on ACK (TOC + manual-ack READs); $1808 reads advance separately */
-    case PH_STATUS:  change_phase(PH_MSGIN); break;
+    case PH_STATUS:
+        if (s_cd) s_adpcm_ctrl &= ~0x01u;   /* mednafen: DMA-end latch clear on STATUS ACK */
+        change_phase(PH_MSGIN);
+        break;
     case PH_MSGIN:   change_phase(PH_BUSFREE); break;
     }
 }
 
 uint8_t pce_scsi_read(uint8_t reg)
 {
+    /* ADPCM DMA path: the System Card polls $1800/$180B in a tight loop and
+     * expects SCSI->ADPCM to advance during those reads (Mednafen ADPCM_Run).
+     * Pumping only once/frame in pce_scsi_run() hangs Sapphire at level load. */
+    if ((s_adpcm_ctrl & 0x03) && s_reading) {
+        adpcm_dma_try_start();
+        adpcm_dma_pump(-1);
+    }
+
     if (s_bulk && s_phase == PH_DATAIN && s_trace < 12) {
         diag("R%x db=%02x\n", reg & 0xf, s_db);
         s_trace++;
@@ -843,18 +855,11 @@ void pce_scsi_write(uint8_t reg, uint8_t val)
           if (!was_playing && pce_adpcm_playing())
               diag("  ADPCM PLAY start reg=%02x val=%02x freq=n/a\n", reg, val); }
         break;
-    case 0x0B: /* ADPCM DMA control: bit1 = enable SCSI->ADPCM auto-transfer */
+    case 0x0B: /* ADPCM DMA control ($180B): Mednafen runs DMA when val & 0x3 */
         s_adpcm_ctrl = val;
-        if ((val & 0x02) && s_reading && !s_adpcm_dma_active) {
-            s_adpcm_dma_active = true;      /* pumped per frame by pce_scsi_run */
-            s_adpcm_dma_total = 0;
-            /* the bus already PRESENTS the sector's first byte (feed_din ran at
-             * READ execute); rewind so the pump starts from it. Skipping it
-             * shifted the whole ADPCM image one byte vs disc — fatal for games
-             * that stream structured data through ADPCM RAM (Dynastic Hero),
-             * merely noisy for voice samples. */
-            if (s_req && s_din_pos > 0) s_din_pos--;
-        }
+        adpcm_dma_try_start();
+        if ((s_adpcm_ctrl & 0x03) && s_reading)
+            adpcm_dma_pump(-1);
         break;
     case 0x04: /* reset */
         if (val & 0x02) {
@@ -873,4 +878,4 @@ void pce_scsi_write(uint8_t reg, uint8_t val)
 
 /* Per-frame hook from the main loop: pump any active SCSI->ADPCM DMA,
  * advance the CD-DA/ADPCM fader one step, and refresh the IRQ2 level. */
-void pce_scsi_run(void) { adpcm_dma_pump(); fader_run(); update_irq(); }
+void pce_scsi_run(void) { adpcm_dma_pump(4 * 2048); fader_run(); update_irq(); }
