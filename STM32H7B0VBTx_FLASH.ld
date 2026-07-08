@@ -612,6 +612,28 @@ INCLUDE build/fceumm_mappers.ld
   }
   _OVERLAY_CELESTE_BSS_SIZE = SIZEOF(.overlay_celeste_bss);
 
+  .overlay_durak __RAM_EMU_START__ : {
+    . = ALIGN(4);
+    __ram_emu_durak_start__ = .;
+    build/durak/*.o (.data .data* .text .text* .rodata .rodata*)
+    . = ALIGN(4);
+    _OVERLAY_DURAK_LOAD_END = .;
+  } AT > CORES
+  _OVERLAY_DURAK_LOAD_START = LOADADDR(.overlay_durak);
+  _OVERLAY_DURAK_SIZE = SIZEOF(.overlay_durak);
+
+  .overlay_durak_bss _OVERLAY_DURAK_LOAD_END : {
+    . = ALIGN(4);
+    _OVERLAY_DURAK_BSS_START = .;
+    build/durak/*.o (.bss .bss*)
+    . = ALIGN(4);
+    build/durak/*.o (COMMON)
+    __ram_emu_durak_end__ = .;
+    _OVERLAY_DURAK_BSS_END = .;
+    ASSERT(ABSOLUTE(_OVERLAY_DURAK_BSS_END) < __RAM_EMU_END__, "Error: DURAK BSS overflow");
+  }
+  _OVERLAY_DURAK_BSS_SIZE = SIZEOF(.overlay_durak_bss);
+
   /* PICO-8 stub overlay → RAM, placed at the LOW end of the LCD bonus
      area. Same VMA as the runtime-loaded pico8.bin so engine RAM refs
      resolve. In SD_CARD=0 builds the SD-built pico8.bin/.ro/_itcm.bin

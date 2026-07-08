@@ -110,6 +110,13 @@ extern void * _OVERLAY_CELESTE_LOAD_START[];
 extern uint8_t _OVERLAY_CELESTE_SIZE;
 extern void * _OVERLAY_CELESTE_BSS_START[];
 extern uint8_t _OVERLAY_CELESTE_BSS_SIZE;
+
+extern void * _OVERLAY_DURAK_LOAD_START[];
+extern uint8_t _OVERLAY_DURAK_SIZE;
+extern void * _OVERLAY_DURAK_BSS_START[];
+extern void * _OVERLAY_DURAK_BSS_END[];
+extern uint8_t _OVERLAY_DURAK_BSS_SIZE;
+
 extern void * _OVERLAY_PICO8_LOAD_START[];
 extern uint8_t _OVERLAY_PICO8_SIZE;
 extern void * _OVERLAY_PICO8_BSS_START[];

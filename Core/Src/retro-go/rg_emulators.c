@@ -28,6 +28,7 @@
 #include "main_smw.h"
 #include "main_videopac.h"
 #include "main_celeste.h"
+#include "main_durak.h"
 #include "main_pico8.h"
 #include "main_tama.h"
 #include "main_pkmini.h"
@@ -1257,6 +1258,10 @@ void emulator_start(retro_emulator_file_t *file, bool load_state, bool start_pau
             memset(&_OVERLAY_CELESTE_BSS_START, 0x0, (size_t)&_OVERLAY_CELESTE_BSS_SIZE);
             SCB_CleanDCache_by_Addr((uint32_t *)&__RAM_EMU_START__, (size_t)&_OVERLAY_CELESTE_SIZE);
             app_main_celeste(load_state, start_paused, save_slot);
+        } else if (strcmp(newfile->name,"durak") == 0) {
+            memset(&_OVERLAY_DURAK_BSS_START, 0x0, (size_t)&_OVERLAY_DURAK_BSS_SIZE);
+            SCB_CleanDCache_by_Addr((uint32_t *)&__RAM_EMU_START__, (size_t)&_OVERLAY_DURAK_SIZE);
+            app_main_durak(load_state, start_paused, save_slot);
         } else if (strcmp(newfile->name,"Zelda 3") == 0) {
             memset(&_OVERLAY_ZELDA3_BSS_START, 0x0, (size_t)&_OVERLAY_ZELDA3_BSS_SIZE);
             SCB_CleanDCache_by_Addr((uint32_t *)&__RAM_EMU_START__, (size_t)&_OVERLAY_ZELDA3_SIZE);

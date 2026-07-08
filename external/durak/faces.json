@@ -1,0 +1,20 @@
+{"frames": [
+
+{
+	"filename": "faces.png",
+	"frame": {"x":1,"y":1,"w":640,"h":32},
+	"rotated": false,
+	"trimmed": false,
+	"spriteSourceSize": {"x":0,"y":0,"w":640,"h":32},
+	"sourceSize": {"w":640,"h":32}
+}],
+"meta": {
+	"app": "https://www.codeandweb.com/texturepacker",
+	"version": "1.0",
+	"image": "faces.png",
+	"format": "RGBA8888",
+	"size": {"w":642,"h":34},
+	"scale": "1",
+	"smartupdate": "$TexturePacker:SmartUpdate:83ab484797c571e0ee65d674f9b857ba:77a074dd93c01bdf5bbea984e9892b35:7cf197594d1a3722e0018a2f0a0b0770$"
+}
+}
