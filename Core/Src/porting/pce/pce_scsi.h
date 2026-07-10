@@ -72,3 +72,4 @@ typedef struct {
 } pce_scsi_state_t;
 void pce_scsi_state_get(pce_scsi_state_t *st);
 void pce_scsi_state_set(const pce_scsi_state_t *st);
+void pce_scsi_post_restore(void);   /* update IRQ2 after CD savestate blocks */

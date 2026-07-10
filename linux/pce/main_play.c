@@ -24,6 +24,9 @@
 #include "pce_scsi.h"
 #include "pce_adpcm.h"
 #include "syscard_load.h"
+#ifdef PCE_ENABLE_ARCADE_CARD
+#include "arcade_card.h"
+#endif
 #include "pce_input_sdl.h"
 #include "pce_audio.h"
 
@@ -241,6 +244,8 @@ int init_window(int width, int height)
 	return 0;
 }
 
+#define SAVE_STATE_BUFFER_SIZE (76 * 1024)
+
 static bool host_LoadState(const char *savePathName)
 {
 	char buffer[512];
@@ -248,19 +253,50 @@ static bool host_LoadState(const char *savePathName)
 	if (fp == NULL)
 		return false;
 
-	fread(&buffer, 8, 1, fp);
-	if (memcmp(&buffer, SAVESTATE_HEADER, 8) != 0) {
+	if (fread(buffer, 8, 1, fp) != 1 ||
+	    memcmp(buffer, SAVESTATE_HEADER, 8) != 0) {
 		MESSAGE_ERROR("Loading state failed: Header mismatch\n");
 		fclose(fp);
 		return false;
 	}
 
-	for (int i = 0; SaveStateVars[i].len > 0; i++)
-		fread(SaveStateVars[i].ptr, SaveStateVars[i].len, 1, fp);
+	/* Device saves: header(8) + 0 + CRC(4) + SVARs + pad → 76KB, then CD RAM.
+	 * Legacy linux saves: header(8) + SVARs + CD RAM (no pad, no CRC). */
+	uint8_t probe = 0;
+	if (fread(&probe, 1, 1, fp) != 1) {
+		fclose(fp);
+		return false;
+	}
+	const bool padded = (probe == 0);
+	if (padded) {
+		uint32_t saved_crc;
+		if (fread(&saved_crc, sizeof(saved_crc), 1, fp) != 1) {
+			fclose(fp);
+			return false;
+		}
+		(void)saved_crc;
+		/* SVARs start at byte 13 — do NOT skip to 76KB here (that was loading
+		 * CD-ROM bytes into CPU/RAM and caused the post-load freeze). */
+	} else {
+		fseek(fp, 8, SEEK_SET);
+	}
+
+	for (int i = 0; SaveStateVars[i].len > 0; i++) {
+		if (fread(SaveStateVars[i].ptr, SaveStateVars[i].len, 1, fp) != 1) {
+			fclose(fp);
+			return false;
+		}
+	}
 
 	if (g_cue_path) {
-		for (int v = 0x68; v <= 0x87; v++)
-			fread(PCE.MemoryMapW[v], 0x2000, 1, fp);
+		if (padded)
+			fseek(fp, SAVE_STATE_BUFFER_SIZE, SEEK_SET);
+		for (int v = 0x68; v <= 0x87; v++) {
+			if (fread(PCE.MemoryMapW[v], 0x2000, 1, fp) != 1) {
+				fclose(fp);
+				return false;
+			}
+		}
 		pce_scsi_reset();
 		uint32_t cdda[1 + PCE_SCSI_CDDA_STATE_WORDS];
 		if (fread(cdda, sizeof(cdda), 1, fp) == 1 && cdda[0] == 0x41444443u)
@@ -270,6 +306,7 @@ static bool host_LoadState(const char *savePathName)
 		if (fread(adpc, sizeof(adpc), 1, fp) == 1 && adpc[0] == 0x43504441u) {
 			fread(pce_adpcm_ram(), 1, 0x10000, fp);
 			pce_adpcm_set(adpc + 1);
+			pce_adpcm_reconcile_load();
 		} else {
 			pce_adpcm_reset();
 		}
@@ -277,6 +314,19 @@ static bool host_LoadState(const char *savePathName)
 		  if (fread(&scsx, sizeof(scsx), 1, fp) == 1 && scsx == 0x58534353u &&
 		      fread(&sst, sizeof(sst), 1, fp) == 1)
 		      pce_scsi_state_set(&sst); }
+#ifdef PCE_ENABLE_ARCADE_CARD
+		{ long arc_pos = ftell(fp); uint32_t arcd = 0;
+		  static pce_arcade_card_state_t acst;
+		  if (fread(&arcd, sizeof(arcd), 1, fp) == 1 && arcd == PCE_ARCADE_CARD_STATE_MAGIC &&
+		      fread(&acst, sizeof(acst), 1, fp) == 1) {
+		      pce_arcade_card_state_set(&acst);
+		      if (acst.ram_used && pce_arcade_card_ram())
+		          fread(pce_arcade_card_ram(), 1, 0x200000, fp);
+		  } else if (arc_pos >= 0)
+		      fseek(fp, arc_pos, SEEK_SET);
+		}
+#endif
+		pce_scsi_post_restore();
 #endif
 	}
 
@@ -299,8 +349,22 @@ static bool host_SaveState(const char *savePathName)
 		return false;
 
 	fwrite(SAVESTATE_HEADER, 8, 1, fp);
-	for (int i = 0; SaveStateVars[i].len > 0; i++)
+	uint8_t zero = 0;
+	fwrite(&zero, 1, 1, fp);
+	fwrite(&PCE.ROM_CRC, sizeof(PCE.ROM_CRC), 1, fp);
+	long pos = 8 + 1 + (long)sizeof(PCE.ROM_CRC);
+	for (int i = 0; SaveStateVars[i].len > 0; i++) {
 		fwrite(SaveStateVars[i].ptr, SaveStateVars[i].len, 1, fp);
+		pos += (long)SaveStateVars[i].len;
+	}
+	{ static const uint8_t pad[512] = {0};
+	  while (pos < SAVE_STATE_BUFFER_SIZE) {
+	      long chunk = SAVE_STATE_BUFFER_SIZE - pos;
+	      if (chunk > (long)sizeof(pad)) chunk = (long)sizeof(pad);
+	      fwrite(pad, 1, (size_t)chunk, fp);
+	      pos += chunk;
+	  }
+	}
 
 	if (g_cue_path) {
 		for (int v = 0x68; v <= 0x87; v++)
@@ -319,6 +383,16 @@ static bool host_SaveState(const char *savePathName)
 		  pce_scsi_state_get(&sst);
 		  fwrite(&scsx, sizeof(scsx), 1, fp);
 		  fwrite(&sst, sizeof(sst), 1, fp); }
+#ifdef PCE_ENABLE_ARCADE_CARD
+		{ uint32_t arcd = PCE_ARCADE_CARD_STATE_MAGIC;
+		  static pce_arcade_card_state_t acst;
+		  pce_arcade_card_state_get(&acst);
+		  fwrite(&arcd, sizeof(arcd), 1, fp);
+		  fwrite(&acst, sizeof(acst), 1, fp);
+		  if (acst.ram_used && pce_arcade_card_ram())
+		      fwrite(pce_arcade_card_ram(), 1, 0x200000, fp);
+		}
+#endif
 #endif
 	}
 
@@ -464,6 +538,14 @@ int InitPCE(int samplerate, bool stereo, const char *huecard)
 		}
 		/* BRAM: per-game .sram file. */
 		pce_sram_load();
+
+#ifdef PCE_ENABLE_ARCADE_CARD
+		if (!getenv("PCE_ARCADE_CARD") || strcmp(getenv("PCE_ARCADE_CARD"), "0") != 0) {
+			pce_arcade_card_init();
+			pce_arcade_card_map_banks();
+			printf("Arcade Card enabled (2MB RAM, banks $40-$43, I/O $1A00-$1BFF)\n");
+		}
+#endif
 	}
 
 	gfx_reset(0);

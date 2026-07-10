@@ -19,6 +19,9 @@
 #include "pce_scsi.h"
 #include "pce_adpcm.h"
 #include "syscard_load.h"
+#ifdef PCE_ENABLE_ARCADE_CARD
+#include "arcade_card.h"
+#endif
 #include "pce_input_sdl.h"
 #include "pce_audio.h"
 
@@ -798,6 +801,17 @@ static bool host_LoadState(const char *savePathName)
 		  if (fread(&scsx, sizeof(scsx), 1, fp) == 1 && scsx == 0x58534353u &&
 		      fread(&sst, sizeof(sst), 1, fp) == 1)
 		      pce_scsi_state_set(&sst); }
+#ifdef PCE_ENABLE_ARCADE_CARD
+		{ long arc_pos = ftell(fp); uint32_t arcd = 0;
+		  static pce_arcade_card_state_t acst;
+		  if (fread(&arcd, sizeof(arcd), 1, fp) == 1 && arcd == PCE_ARCADE_CARD_STATE_MAGIC &&
+		      fread(&acst, sizeof(acst), 1, fp) == 1) {
+		      pce_arcade_card_state_set(&acst);
+		      if (acst.ram_used && pce_arcade_card_ram())
+		          fread(pce_arcade_card_ram(), 1, 0x200000, fp);
+		  } else if (arc_pos >= 0)
+		      fseek(fp, arc_pos, SEEK_SET);
+		}
 #endif
 	}
 
@@ -851,6 +865,16 @@ static bool host_SaveState(const char *savePathName)
 		  pce_scsi_state_get(&sst);
 		  fwrite(&scsx, sizeof(scsx), 1, fp);
 		  fwrite(&sst, sizeof(sst), 1, fp); }
+#ifdef PCE_ENABLE_ARCADE_CARD
+		{ uint32_t arcd = PCE_ARCADE_CARD_STATE_MAGIC;
+		  static pce_arcade_card_state_t acst;
+		  pce_arcade_card_state_get(&acst);
+		  fwrite(&arcd, sizeof(arcd), 1, fp);
+		  fwrite(&acst, sizeof(acst), 1, fp);
+		  if (acst.ram_used && pce_arcade_card_ram())
+		      fwrite(pce_arcade_card_ram(), 1, 0x200000, fp);
+		}
+#endif
 #endif
 	}
 
@@ -1012,6 +1036,14 @@ InitPCE(int samplerate, bool stereo, const char *huecard)
 		}
 		/* BRAM: per-game .sram file. */
 		pce_sram_load();
+
+#ifdef PCE_ENABLE_ARCADE_CARD
+		if (!getenv("PCE_ARCADE_CARD") || strcmp(getenv("PCE_ARCADE_CARD"), "0") != 0) {
+			pce_arcade_card_init();
+			pce_arcade_card_map_banks();
+			printf("Arcade Card enabled (2MB RAM, banks $40-$43, I/O $1A00-$1BFF)\n");
+		}
+#endif
 	}
 
 	gfx_reset(0);

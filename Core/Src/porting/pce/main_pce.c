@@ -333,6 +333,7 @@ static bool LoadState(const char *savePathName) {
         if (fread(adpc, sizeof(adpc), 1, file) == 1 && adpc[0] == 0x43504441u) {
             fread(pce_adpcm_ram(), 1, 0x10000, file);
             pce_adpcm_set(adpc + 1);
+            pce_adpcm_reconcile_load();
         } else {
             pce_adpcm_reset();
         }
@@ -344,6 +345,7 @@ static bool LoadState(const char *savePathName) {
             fread(&sst, sizeof(sst), 1, file) == 1) {
             pce_scsi_state_set(&sst);
         }
+        pce_scsi_post_restore();
     }
     fclose(file);
 

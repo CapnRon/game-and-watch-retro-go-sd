@@ -184,11 +184,14 @@ static int      s_atrace;           /* trace ADPCM/idle-loop polls ($180A-F, $18
  * enable it via $1802 bit3 and SLEEP until the end IRQ to queue the next music
  * segment; without this wire a state-load that resumed mid-segment froze ~2s
  * later, exactly when the restored segment ran out (Cotton). */
-#define IRQ_ADPCM_END 0x08
+#define IRQ_ADPCM_HALF 0x04
+#define IRQ_ADPCM_END  0x08
 
 static uint8_t effective_port3(void)
 {
-    return (uint8_t)(s_port3 | (pce_adpcm_end_flag() ? IRQ_ADPCM_END : 0));
+    return (uint8_t)(s_port3
+                     | (pce_adpcm_half_flag() ? IRQ_ADPCM_HALF : 0)
+                     | (pce_adpcm_end_flag()  ? IRQ_ADPCM_END  : 0));
 }
 
 static void update_irq(void)
@@ -570,6 +573,10 @@ void pce_scsi_state_get(pce_scsi_state_t *st)
     st->read_lba = s_read_lba; st->read_remain = s_read_remain;
     st->port2 = s_port2; st->port3 = s_port3; st->adpcm_ctrl = s_adpcm_ctrl;
     st->adpcm_dma_total = s_adpcm_dma_total;
+    st->fader_cdda_vol  = s_fader_cdda_vol;
+    st->fader_adpcm_vol = s_fader_adpcm_vol;
+    st->fader_step      = s_fader_step;
+    st->fader_adpcm     = s_fader_adpcm ? 1u : 0u;
     memcpy(st->din, s_din, sizeof(s_din));
 }
 
@@ -588,10 +595,23 @@ void pce_scsi_state_set(const pce_scsi_state_t *st)
     s_read_lba = st->read_lba; s_read_remain = st->read_remain;
     s_port2 = st->port2; s_port3 = st->port3; s_adpcm_ctrl = st->adpcm_ctrl;
     s_adpcm_dma_total = st->adpcm_dma_total;
+    s_fader_cdda_vol  = st->fader_cdda_vol;
+    s_fader_adpcm_vol = st->fader_adpcm_vol;
+    s_fader_step      = st->fader_step;
+    s_fader_adpcm     = st->fader_adpcm != 0;
+    if (!st->fader_step && !st->fader_cdda_vol && !st->fader_adpcm_vol) {
+        s_fader_cdda_vol  = FADER_VOL_MAX;
+        s_fader_adpcm_vol = FADER_VOL_MAX;
+    }
     memcpy(s_din, st->din, sizeof(s_din));
     update_irq();
     diag("  SCSI restore phase=%d reading=%d remain=%lu p2=%02x p3=%02x\n",
          s_phase, (int)s_reading, (unsigned long)s_read_remain, s_port2, s_port3);
+}
+
+void pce_scsi_post_restore(void)
+{
+    update_irq();
 }
 
 /* Savestate snapshot of the CD-DA stream (see pce_scsi.h). */
@@ -813,6 +833,7 @@ uint8_t pce_scsi_read(uint8_t reg)
     case 0x0A: return pce_adpcm_read(0x0A);   /* ADPCM RAM data */
     case 0x0B: return s_adpcm_ctrl;
     case 0x0C: return pce_adpcm_read(0x0C);   /* ADPCM status (end/playing) */
+    case 0x0D: return pce_adpcm_read(0x0D);   /* ADPCM last command */
     default:   return 0;
     }
 }
