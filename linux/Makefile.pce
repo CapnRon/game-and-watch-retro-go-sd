@@ -3,9 +3,12 @@
 #   make -f Makefile.pce              → interactive player (main_play.c)
 #   make -f Makefile.pce debug        → diagnostic harness (main.c, heavy trace)
 #   make -f Makefile.pce SAN=1        → build with AddressSanitizer
+#   make -f Makefile.pce PCE_ENABLE_ARCADE_CARD=0  → build without Arcade Card
 #
 TARGET = retro-go-pce
 BUILD_DIR = build
+
+PCE_ENABLE_ARCADE_CARD ?= 1
 
 # Default: play mode. Override with: make -f Makefile.pce debug
 MODE ?= play
@@ -66,6 +69,10 @@ CP = $(PREFIX)objcopy
 SZ = $(PREFIX)size
 
 C_DEFS = -DIS_LITTLE_ENDIAN -DLINUX_EMU $(C_DEFS_EXTRA)
+ifeq ($(PCE_ENABLE_ARCADE_CARD),1)
+C_DEFS += -DPCE_ENABLE_ARCADE_CARD
+C_SOURCES += pce/arcade_card.c
+endif
 
 C_INCLUDES = \
 -I. \
