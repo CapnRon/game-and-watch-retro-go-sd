@@ -80,7 +80,6 @@ C_INCLUDES = \
 -I../Core/Src/porting/lib \
 -I../Core/Src/porting/lib/lzma \
 -I../retro-go-stm32/pce-go/components/pce-go \
--I../Core/Src/porting/pce \
 -I../Core/Inc/porting/pce \
 -I../Core/Inc \
 -I../Core/Inc/retro-go \

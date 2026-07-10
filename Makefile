@@ -869,6 +869,7 @@ SMSPLUSGX_C_INCLUDES +=  \
 
 PCE_C_INCLUDES +=  \
 -ICore/Inc \
+-ICore/Inc/porting/pce \
 -ICore/Src/porting/lib \
 -ICore/Src/porting/lib/lzma \
 -Iretro-go-stm32/components/odroid \
