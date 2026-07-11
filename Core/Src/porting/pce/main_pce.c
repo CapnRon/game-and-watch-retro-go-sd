@@ -873,7 +873,8 @@ void pce_pcm_submit() {
         /* mix left & right */
         int32_t sample = (audioBuffer_pce[i*2] + audioBuffer_pce[i*2+1]);
         if (cdda_n && i < cdda_n)
-            sample += (cdda_buf[i*2] + cdda_buf[i*2+1]) >> 1;   /* CD-DA already fader-scaled */
+            sample += (((int32_t)cdda_buf[i*2] + (int32_t)cdda_buf[i*2+1]) >> 1)
+                      * (int32_t)PCE_CDDA_MIX_GAIN;   /* CD-DA already fader-scaled */
         if (adpcm_n && i < adpcm_n) {
             int32_t a = adpcm_buf[i*2];
             if (adpcm_vol < 65536)
@@ -1011,6 +1012,8 @@ int app_main_pce(uint8_t load_state, uint8_t start_paused, int8_t save_slot) {
         pce_pcm_submit();
 
         pce_sound_sync_with_prefetch();   /* sound_sync + CD-DA prefetch in the wait */
+
+        pce_adpcm_frame_end();
 
         // Prevent overflow
         PCE.Timer.cycles_counter -= Cycles;

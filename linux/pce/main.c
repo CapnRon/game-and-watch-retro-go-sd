@@ -1441,6 +1441,8 @@ int main(int argc, char *argv[])
             if (af && an > 0) fwrite(ab, sizeof(int16_t) * 2, an, af);
         }
 
+        pce_adpcm_frame_end();
+
         // Prevent overflow
         PCE.Timer.cycles_counter -= Cycles;
         PCE.MaxCycles -= Cycles;

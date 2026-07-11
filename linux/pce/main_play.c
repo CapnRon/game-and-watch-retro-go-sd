@@ -766,6 +766,8 @@ int main(int argc, char *argv[])
 		pce_pcm_submit();
 		pce_audio_pace();
 
+		pce_adpcm_frame_end();
+
 		PCE.Timer.cycles_counter -= Cycles;
 		PCE.MaxCycles -= Cycles;
 		Cycles = 0;
