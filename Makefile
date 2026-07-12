@@ -809,9 +809,9 @@ CORE_EARTHBOUND = external/earthbound
 EARTHBOUND_GEN_DIR = $(BUILD_DIR)/earthbound_gen
 EARTHBOUND_C_SOURCES = \
 $(wildcard $(CORE_EARTHBOUND)/src/core/*.c) \
-$(CORE_EARTHBOUND)/src/core/tamp/common.c \
-$(CORE_EARTHBOUND)/src/core/tamp/compressor.c \
-$(CORE_EARTHBOUND)/src/core/tamp/decompressor.c \
+$(CORE_EARTHBOUND)/src/vendor/tamp/tamp/_c_src/tamp/common.c \
+$(CORE_EARTHBOUND)/src/vendor/tamp/tamp/_c_src/tamp/compressor.c \
+$(CORE_EARTHBOUND)/src/vendor/tamp/tamp/_c_src/tamp/decompressor.c \
 $(wildcard $(CORE_EARTHBOUND)/src/entity/*.c) \
 $(wildcard $(CORE_EARTHBOUND)/src/game/*.c) \
 $(wildcard $(CORE_EARTHBOUND)/src/intro/*.c) \
@@ -1023,7 +1023,7 @@ EARTHBOUND_C_INCLUDES +=  \
 -ICore/Src/porting/lib \
 -Iretro-go-stm32/components/odroid \
 -I$(CORE_EARTHBOUND)/src \
--I$(CORE_EARTHBOUND)/src/core/tamp \
+-I$(CORE_EARTHBOUND)/src/vendor/tamp/tamp/_c_src \
 -I$(CORE_EARTHBOUND)/src/include \
 -I$(CORE_EARTHBOUND)/src/vendor/incbin \
 -I$(CORE_EARTHBOUND)/src/vendor/lakesnes/snes \

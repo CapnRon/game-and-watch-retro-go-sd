@@ -1210,6 +1210,7 @@ C_DEFS_EARTHBOUND =  \
 -DEB_PPU_FORCE_SPEED_OPT=1 \
 -DEB_HAVE_SAVESTATE_BACKEND=1 \
 -DTAMP_STREAM=0 \
+-DTAMP_EXTENDED=0 \
 -include Core/Inc/porting/earthbound/eb_alloc.h \
 
 # Items/music headers come from `ebtools generate items-header` and
@@ -1259,7 +1260,7 @@ endef
 # INCBIN_OUTPUT_SECTION + EBASSET_TABLE_ATTR overrides.
 $(eval $(foreach obj,$(filter-out %/embedded_assets_array.c,$(EARTHBOUND_C_SOURCES)),$(call earthbound_obj_prereq_gen,$(obj))))
 
-# Vendored tamp (savestate compression) + the savestate engine itself: build for
+# tamp (savestate compression; submodule inside external/earthbound) + the savestate engine itself: build for
 # size, not speed — see note above. state_dump runs once per save/load (not per
 # frame) and its CRC now covers only the ~30 KB compressed payload, so -Os there
 # costs nothing measurable and buys back EB-overlay RAM_EMU headroom.
