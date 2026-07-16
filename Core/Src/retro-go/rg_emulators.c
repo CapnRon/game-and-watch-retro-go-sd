@@ -239,8 +239,8 @@ static retro_emulator_file_t *shared_files = NULL;
 #endif /* COVERFLOW */
 // Increase when adding new emulators
 #define MAX_EMULATORS 21
-static retro_emulator_t emulators[MAX_EMULATORS];
-static rom_system_t systems[MAX_EMULATORS];
+static retro_emulator_t *emulators;
+static rom_system_t *systems;
 static int emulators_count = 0;
 
 #if CHEAT_CODES == 1
@@ -785,7 +785,7 @@ static bool show_cheat_dialog()
     static odroid_dialog_choice_t last = ODROID_DIALOG_CHOICE_LAST;
 
     // +1 for the terminator sentinel
-    odroid_dialog_choice_t *choices = rg_alloc((CHOSEN_FILE->cheat_count + 1) * sizeof(odroid_dialog_choice_t), MEM_ANY);
+    odroid_dialog_choice_t *choices = malloc((CHOSEN_FILE->cheat_count + 1) * sizeof(odroid_dialog_choice_t));
     char svalues[MAX_CHEAT_CODES][10];
     for(int i=0; i<CHOSEN_FILE->cheat_count; i++) 
     {
@@ -802,7 +802,7 @@ static bool show_cheat_dialog()
     choices[CHOSEN_FILE->cheat_count] = last;
     odroid_overlay_dialog(curr_lang->s_Cheat_Codes_Title, choices, 0, NULL, 0);
 
-    rg_free(choices);
+    free(choices);
     odroid_settings_commit();
     return false;
 }
@@ -1186,6 +1186,10 @@ void emulator_start(retro_emulator_file_t *file, bool load_state, bool start_pau
         }
     }
 
+    /* systems[] lives in AHB and is wiped by ahb_init(). In-game code must
+     * not touch ACTIVE_FILE->system (use handlers / path instead). */
+    newfile->system = NULL;
+
     // It will free all ram allocated memory for use by emulators
     ahb_init();
     itc_init();
@@ -1371,6 +1375,11 @@ void emulator_start(retro_emulator_file_t *file, bool load_state, bool start_pau
 
 void emulators_init()
 {
+    if (!emulators) {
+        emulators = (retro_emulator_t *)ahb_calloc(MAX_EMULATORS, sizeof(retro_emulator_t));
+        systems = (rom_system_t *)ahb_calloc(MAX_EMULATORS, sizeof(rom_system_t));
+    }
+
     add_emulator("Nintendo Gameboy", "gb", "gb gbc lzma", RG_LOGO_PAD_GB, RG_LOGO_HEADER_GB, NO_GAME_DATA);
     add_emulator("Nintendo Gameboy Color", "gbc", "gb gbc lzma", RG_LOGO_PAD_GB, RG_LOGO_HEADER_GBC, NO_GAME_DATA);
     add_emulator("Nintendo Entertainment System", "nes", "nes fds nsf lzma", RG_LOGO_PAD_NES, RG_LOGO_HEADER_NES, NO_GAME_DATA);
