@@ -586,6 +586,40 @@ static const char *get_extension(const char *filename) {
     return NULL;
 }
 
+static bool emulator_is_pcecd(const retro_emulator_t *emu)
+{
+    return strcmp(emu->dirname, "pcecd") == 0;
+}
+
+/* True if path contains at least one .cue as a direct child (game folder). */
+static int pcecd_probe_cue_cb(const rg_scandir_t *entry, void *arg)
+{
+    bool *found = (bool *)arg;
+    const char *ext;
+
+    if (!entry->is_file)
+        return RG_SCANDIR_CONTINUE;
+    ext = rg_extension(entry->basename);
+    if (ext && ext[0])
+    {
+        char ext_buf[8];
+        snprintf(ext_buf, sizeof(ext_buf), "%s", ext);
+        if (strcmp(rg_strtolower(ext_buf), "cue") == 0)
+        {
+            *found = true;
+            return RG_SCANDIR_STOP;
+        }
+    }
+    return RG_SCANDIR_CONTINUE;
+}
+
+static bool pcecd_dir_has_cue(const char *path)
+{
+    bool found = false;
+    rg_storage_scandir(path, pcecd_probe_cue_cb, &found, RG_SCANDIR_FILES);
+    return found;
+}
+
 static int scan_folder_cb(const rg_scandir_t *entry, void *arg)
 {
     retro_emulator_t *emu = (retro_emulator_t *)arg;
@@ -606,9 +640,17 @@ static int scan_folder_cb(const rg_scandir_t *entry, void *arg)
     }
     else if (entry->is_dir)
     {
-        /* PCE CD lists every .cue flat (recursive scan descends game folders),
-         * so its sub-folders are not shown as browse rows. */
-        is_valid = (strcmp(emu->dirname, "pcecd") != 0);
+        if (emulator_is_pcecd(emu) && pcecd_dir_has_cue(entry->path))
+        {
+            /* Game folder (cue+bin): list its .cue files here, omit the folder row.
+             *   /roms/pcecd/a/b.cue           → root shows "b"
+             *   /roms/pcecd/news/a/b.cue      → root shows "> news", inside: "b"
+             */
+            rg_storage_scandir(entry->path, scan_folder_cb, emu, RG_SCANDIR_FILES);
+            return (emu->roms.count >= emu->roms.maxcount) ? RG_SCANDIR_STOP
+                                                           : RG_SCANDIR_CONTINUE;
+        }
+        is_valid = true;
     }
 
     if (!is_valid)
@@ -688,10 +730,7 @@ void emulator_init(retro_emulator_t *emu)
     rg_storage_mkdir(folder);
 
     emulator_browse_folder_path(emu, folder, sizeof(folder));
-    {
-        uint32_t scan_flags = (strcmp(emu->dirname, "pcecd") == 0) ? RG_SCANDIR_RECURSIVE : 0;
-        rg_storage_scandir(folder, scan_folder_cb, emu, scan_flags);
-    }
+    rg_storage_scandir(folder, scan_folder_cb, emu, 0);
 }
 
 void emulator_refresh_list(retro_emulator_t *emu)
@@ -702,10 +741,7 @@ void emulator_refresh_list(retro_emulator_t *emu)
     rg_storage_mkdir(folder);
 
     emulator_browse_folder_path(emu, folder, sizeof(folder));
-    {
-        uint32_t scan_flags = (strcmp(emu->dirname, "pcecd") == 0) ? RG_SCANDIR_RECURSIVE : 0;
-        rg_storage_scandir(folder, scan_folder_cb, emu, scan_flags);
-    }
+    rg_storage_scandir(folder, scan_folder_cb, emu, 0);
 }
 
 void emulator_show_file_info(retro_emulator_file_t *file)
@@ -1382,7 +1418,9 @@ void emulators_init()
     add_emulator("Game & Watch", "gw", "gw", RG_LOGO_PAD_GW, RG_LOGO_HEADER_GW, NO_GAME_DATA);
     add_emulator("PC Engine", "pce", "pce lzma", RG_LOGO_PAD_PCE, RG_LOGO_HEADER_PCE, NO_GAME_DATA);
     /* PC Engine CD: same pce overlay; disc streamed from SD, System Card BIOS at boot. */
+#if SD_CARD == 1
     add_emulator("PC Engine CD", "pcecd", "cue", RG_LOGO_PAD_PCE, RG_LOGO_HEADER_PCECD, NO_GAME_DATA);
+#endif
     add_emulator("Sega Game Gear", "gg", "gg lzma", RG_LOGO_PAD_GG, RG_LOGO_HEADER_GG, NO_GAME_DATA);
     add_emulator("Sega Master System", "sms", "sms lzma", RG_LOGO_PAD_SMS, RG_LOGO_HEADER_SMS, NO_GAME_DATA);
     add_emulator("Sega Genesis", "md", "md gen bin lzma", RG_LOGO_PAD_GEN, RG_LOGO_HEADER_GEN, GAME_DATA_BYTESWAP_16);
