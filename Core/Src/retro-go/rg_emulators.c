@@ -1456,6 +1456,8 @@ void emulator_start(retro_emulator_file_t *file, bool load_state, bool start_pau
     ahb_init();
     itc_init();
     ram_start = 0;
+    emulators = NULL;
+    systems = NULL;
     // some pointers were freed, set them to null
     rg_reset_logo_buffers();
 
