@@ -16,6 +16,7 @@
 #include "rg_i18n.h"
 #include "rg_emulators.h"
 #include "gw_malloc.h"
+#include "appid.h"
 
 #if !defined(COVERFLOW)
 #define COVERFLOW 0
@@ -302,7 +303,15 @@ tab_t *gui_set_current_tab(int index)
 
 void gui_save_current_tab()
 {
+    /* tab->arg points into AHB emulators[], discarded by ahb_init() when a
+     * core starts. Re-saving from inside an emulator (sleep path) would
+     * persist crushed browse_subpath. Values were already committed at launch. */
+    if (odroid_system_get_app()->id != APPID_LAUNCHER)
+        return;
+
     tab_t *tab = gui_get_current_tab();
+    if (!tab)
+        return;
 
     odroid_settings_MainMenuCursor_set(tab->listbox.cursor);
     odroid_settings_MainMenuSelectedTab_set(gui.selected);
