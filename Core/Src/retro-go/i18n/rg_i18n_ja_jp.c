@@ -24,6 +24,7 @@ const lang_t lang_ja_jp LANG_DATA = {
     .s_LangName = "Japanese",
     // Core\Src\porting\gb\main_gb.c =======================================
     .s_Palette = "パレット",
+    .s_System = "システム",
     //=====================================================================
 
     // Core\Src\porting\nes-fceu\main_nes_fceu.c ===========================
