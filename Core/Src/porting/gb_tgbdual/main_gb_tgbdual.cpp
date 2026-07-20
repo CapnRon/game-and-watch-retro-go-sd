@@ -66,56 +66,146 @@ bool tgb_drawFrame = false;
 
 // --- MAIN
 
+typedef struct __attribute__((packed)) {
+    char magic[4];          /* "GBST" */
+    uint16_t version;       /* 1 = v1 with header; no header => v0 legacy */
+    uint16_t flags;         /* reserved */
+    uint32_t payload_size;  /* bytes after header */
+    uint32_t saved_gb_type; /* gb_type at save time */
+    char cart_name[18];
+} gb_savestate_header_v1_t;
+
+static const size_t gb_v0_rom_info_off = sizeof(gb_regs) + sizeof(gbc_regs);
+
+/* v0 payload starts with gb_regs (34 bytes) — rom_info is 2-byte misaligned,
+ * so never cast to rom_info* (gb_type at +70 faults on strict-align CPUs). */
+static bool gb_v0_cart_name_matches(const unsigned char *payload, const char *expected)
+{
+    return strcmp((const char *)&payload[gb_v0_rom_info_off], expected) == 0;
+}
+
+static int gb_v0_read_gb_type(const unsigned char *payload)
+{
+    int gb_type = 1;
+    memcpy(&gb_type, &payload[gb_v0_rom_info_off + offsetof(rom_info, gb_type)],
+           sizeof(gb_type));
+    return gb_type;
+}
+
+static size_t gb_max_payload_size(gb *core)
+{
+    size_t a = core->get_state_size_for_type(GB_SAVESTATE_V0, 1);
+    size_t b = core->get_state_size_for_type(GB_SAVESTATE_V0, 3);
+    size_t c = core->get_state_size(GB_SAVESTATE_V1);
+    size_t m = a > b ? a : b;
+    return c > m ? c : m;
+}
+
 static bool SaveState(const char *savePathName)
 {
-    size_t size = g_gb->get_state_size();
-
     // We store data in the not visible framebuffer
     lcd_wait_for_vblank();
     unsigned char *data = (unsigned char *)lcd_get_active_buffer();
     g_gb->save_state_mem((void *)data);
 
-    FILE *file = fopen(savePathName, "wb");
-    if (file == NULL) {
-        fclose(file);
-        return false;
-    }
+    gb_savestate_header_v1_t hdr;
+    memcpy(hdr.magic, "GBST", 4);
+    hdr.version = 1;
+    hdr.flags = 0;
+    hdr.payload_size = (uint32_t)g_gb->get_state_size(GB_SAVESTATE_V1);
+    hdr.saved_gb_type = (uint32_t)g_gb->get_rom()->get_info()->gb_type;
+    memcpy(hdr.cart_name, g_gb->get_rom()->get_info()->cart_name, sizeof(hdr.cart_name));
 
-    size_t written = fwrite(data, size, 1, file);
+    FILE *file = fopen(savePathName, "wb");
+    if (file == NULL)
+        return false;
+
+    size_t w1 = fwrite(&hdr, sizeof(hdr), 1, file);
+    size_t w2 = fwrite(data, hdr.payload_size, 1, file);
 
     fclose(file);
-    
-    if (!written) {
-        return false;
-    }
-
-    return true;
+    return w1 == 1 && w2 == 1;
 }
 
 static bool LoadState(const char *savePathName)
 {
-    // We store data in the not visible framebuffer
     unsigned char *data = (unsigned char *)lcd_get_active_buffer();
-    size_t size = g_gb->get_state_size();
-
     FILE *file = fopen(savePathName, "rb");
-    if (file == NULL) {
+    if (file == NULL)
+        return false;
+
+    gb_savestate_header_v1_t hdr;
+    size_t rh = fread(&hdr, 1, sizeof(hdr), file);
+
+    /* v1: header present. */
+    if (rh == sizeof(hdr) && memcmp(hdr.magic, "GBST", 4) == 0 && hdr.version == 1) {
+        if (memcmp(hdr.cart_name, g_gb->get_rom()->get_info()->cart_name, sizeof(hdr.cart_name)) != 0) {
+            fclose(file);
+            return false;
+        }
+
+        size_t max_size = gb_max_payload_size(g_gb);
+        if (hdr.payload_size == 0 || hdr.payload_size > max_size) {
+            fclose(file);
+            return false;
+        }
+
+        size_t n = fread(data, 1, hdr.payload_size, file);
+        fclose(file);
+        if (n != hdr.payload_size)
+            return false;
+
+        if (!g_gb->restore_state_mem((void *)data, GB_SAVESTATE_V1))
+            return false;
+
+        if (memcmp(hdr.cart_name, g_gb->get_rom()->get_info()->cart_name, sizeof(hdr.cart_name)) != 0)
+            return false;
+
+        gb_console_mode = g_gb->get_console_mode();
+        lcd_clear_active_buffer();
+        return true;
+    }
+
+    /* v0 legacy: raw payload, no header.
+     * Layout matches tgbdual-go before TAMA5/SGB/console_mode features. */
+    fseek(file, 0, SEEK_SET);
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    if (file_size <= 0 || (size_t)file_size < gb_v0_rom_info_off + sizeof(rom_info)) {
+        fclose(file);
         return false;
     }
 
-    size_t read = fread(data, size, 1, file);
+    size_t max_size = gb_max_payload_size(g_gb);
+    if ((size_t)file_size > max_size) {
+        fclose(file);
+        return false;
+    }
 
+    size_t n = fread(data, 1, (size_t)file_size, file);
     fclose(file);
+    if (n != (size_t)file_size)
+        return false;
 
-    if (!read) {
+    const char *expected_cart = g_gb->get_rom()->get_info()->cart_name;
+
+    if (!gb_v0_cart_name_matches(data, expected_cart))
+        return false;
+
+    int saved_gb_type = gb_v0_read_gb_type(data);
+    size_t expected = g_gb->get_state_size_for_type(GB_SAVESTATE_V0, saved_gb_type);
+    if ((size_t)file_size != expected) {
+        printf("GB savestate v0 size mismatch: file=%ld expected=%u (gb_type=%d)\n",
+               file_size, (unsigned)expected, saved_gb_type);
         return false;
     }
 
-    if (strcmp((const char *)&(data[34]),g_gb->get_rom()->get_info()->cart_name) == 0)
-        g_gb->restore_state_mem((void *)data);
+    g_gb->restore_state_mem((void *)data, GB_SAVESTATE_V0);
 
+    gb_console_mode = g_gb->get_console_mode();
     lcd_clear_active_buffer();
-
     return true;
 }
 
