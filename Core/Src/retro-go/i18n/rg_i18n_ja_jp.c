@@ -301,6 +301,7 @@ const lang_t lang_ja_jp LANG_DATA = {
     .s_Date_Format = "%02d.%02d.20%02d %s",
     .s_Time_Format = "%02d:%02d:%02d",
 
+    .s_favorite = "お気に入り",
     .fmt_Title_Date_Format = ja_jp_fmt_Title_Date_Format,
     .fmtDate = ja_jp_fmt_Date,
     .fmtTime = ja_jp_fmt_Time,

@@ -292,6 +292,7 @@ const lang_t lang_zh_cn LANG_DATA = {
     .s_Title_Date_Format = "%02d-%02d 周%s %02d:%02d:%02d",
     .s_Time_Format = "%02d:%02d:%02d",
 
+    .s_favorite = "收藏",
     .fmt_Title_Date_Format = zh_cn_fmt_Title_Date_Format,
     .fmtDate = zh_cn_fmt_Date,
     .fmtTime = zh_cn_fmt_Time,

@@ -279,6 +279,7 @@ const lang_t lang_no_nb LANG_DATA = {
     .s_Title_Date_Format = "%s %02d/%02d %02d:%02d:%02d",
     .s_Date_Format = "%s %02d/%02d 20%02d",
     .s_Time_Format = "%02d:%02d:%02d",
+    .s_favorite = "Favoritter",
     .fmt_Title_Date_Format = no_nb_fmt_Title_Date_Format,
     .fmtDate = no_nb_fmt_Date,
     .fmtTime = no_nb_fmt_Time,

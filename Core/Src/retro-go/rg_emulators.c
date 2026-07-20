@@ -9,6 +9,7 @@
 #include "rg_emulators.h"
 #include "rg_storage.h"
 #include "rg_i18n.h"
+#include "favorites.h"
 #include "bitmaps.h"
 #include "gui.h"
 #include "rom_manager.h"
@@ -535,6 +536,23 @@ static void event_handler(gui_event_t event, tab_t *tab)
     }
 }
 
+retro_emulator_file_t *rg_emulators_shared_file_buffer(int *maxcount)
+{
+    if (maxcount)
+        *maxcount = shared_files ? 1000 : 0;
+    return shared_files;
+}
+
+const rom_system_t *rg_emulators_system_for_dir(const char *dirname, size_t len)
+{
+    for (int i = 0; i < emulators_count; i++) {
+        if (strlen(emulators[i].dirname) == len &&
+            strncmp(emulators[i].dirname, dirname, len) == 0)
+            return emulators[i].system;
+    }
+    return NULL;
+}
+
 static void add_emulator(const char *system, const char *dirname, const char* ext,
                          uint16_t logo_idx, uint16_t header_idx, game_data_type_t game_data_type)
 {
@@ -1018,6 +1036,7 @@ void emulator_show_file_info(retro_emulator_file_t *file)
             );
 
             if (delete_confirm_sel == 1) {
+                rg_favorites_remove(file->path); /* drop any stale ★ entry */
                 emulator_delete_rom_storage(file);
                 strcpy(file->path, "");
             } else {
@@ -1243,7 +1262,6 @@ bool emulator_show_file_menu(retro_emulator_file_t *file)
     rg_emu_states_t *savestates = odroid_system_emu_get_states(file->path, 4);
     bool has_save = savestates->used > 0;
     bool has_sram = odroid_sdcard_get_filesize(sram_path) > 0;
-//    bool is_fav = favorite_find(file) != NULL;
     bool force_redraw = false;
 
 #if CHEAT_CODES == 1
@@ -1259,31 +1277,29 @@ bool emulator_show_file_menu(retro_emulator_file_t *file)
 
     CHOSEN_FILE = file;
     emulator_update_cheats_info(CHOSEN_FILE);
-    odroid_dialog_choice_t last = ODROID_DIALOG_CHOICE_LAST;
-    odroid_dialog_choice_t cheat_row = {4, curr_lang->s_Cheat_Codes, "", 1, NULL};
-    odroid_dialog_choice_t cheat_choice = last; 
+#endif
+
+    /* One /favorites.txt read per menu open — the discrete-event rule. */
+    bool is_fav = rg_favorites_contains(file->path);
+
+    /* Built dynamically: the favorites rows vary, and the old fixed-array
+     * "overwrite index N with LAST" cheat-row hack broke on every reshuffle. */
+    const odroid_dialog_choice_t sep = ODROID_DIALOG_CHOICE_SEPARATOR;
+    odroid_dialog_choice_t choices[12];
+    int rows = 0;
+    choices[rows++] = (odroid_dialog_choice_t){0, curr_lang->s_Resume_game, (char *)"", (has_save) ? 1 : -1, NULL};
+    choices[rows++] = (odroid_dialog_choice_t){1, curr_lang->s_New_game, (char *)"", 1, NULL};
+    choices[rows++] = sep;
+    choices[rows++] = (odroid_dialog_choice_t){2, curr_lang->s_Delete_save, (char *)"", (has_save || has_sram) ? 1 : -1, NULL};
+    choices[rows++] = sep;
+    choices[rows++] = (odroid_dialog_choice_t){3, is_fav ? curr_lang->s_Del_favorite : curr_lang->s_Add_favorite, (char *)"", 1, NULL};
+#if CHEAT_CODES == 1
     if (CHOSEN_FILE->cheat_count != 0) {
-        cheat_choice = cheat_row;
+        choices[rows++] = sep;
+        choices[rows++] = (odroid_dialog_choice_t){4, curr_lang->s_Cheat_Codes, (char *)"", 1, NULL};
     }
 #endif
-
-    odroid_dialog_choice_t choices[] = {
-        {0, curr_lang->s_Resume_game, "", (has_save) ? 1:-1, NULL},
-        {1, curr_lang->s_New_game, "", 1, NULL},
-        ODROID_DIALOG_CHOICE_SEPARATOR,
-//        {3, is_fav ? "Del favorite" : "Add favorite", "", 1, NULL},
-        {2, curr_lang->s_Delete_save, "", (has_save || has_sram) ? 1 : -1, NULL},
-#if CHEAT_CODES == 1
-        ODROID_DIALOG_CHOICE_SEPARATOR,
-        cheat_choice,
-#endif
-        ODROID_DIALOG_CHOICE_LAST
-    };
-
-#if CHEAT_CODES == 1
-    if (CHOSEN_FILE->cheat_count == 0)
-        choices[4] = last;
-#endif
+    choices[rows++] = (odroid_dialog_choice_t)ODROID_DIALOG_CHOICE_LAST;
 
     int sel = odroid_overlay_dialog(file->name, choices, has_save ? 0 : 1, &gui_redraw_callback, 0);
 
@@ -1316,12 +1332,13 @@ bool emulator_show_file_menu(retro_emulator_file_t *file)
             odroid_sdcard_unlink(sram_path);
         }
     }
-/*    else if (sel == 3) {
+    else if (sel == 3) { // Add/remove favorite
         if (is_fav)
-            favorite_remove(file);
+            rg_favorites_remove(file->path);
         else
-            favorite_add(file);
-    }*/
+            rg_favorites_add(file->path);
+        force_redraw = true;
+    }
 #if CHEAT_CODES == 1
     else if (sel == 4) {
         if (CHOSEN_FILE->cheat_count != 0)
@@ -1643,6 +1660,9 @@ void emulators_init()
         emulators = (retro_emulator_t *)ahb_calloc(MAX_EMULATORS, sizeof(retro_emulator_t));
         systems = (rom_system_t *)ahb_calloc(MAX_EMULATORS, sizeof(rom_system_t));
     }
+
+    /* ★ Favorites must be the FIRST tab (index 0), before every system tab. */
+    rg_favorites_register_tab();
 
     add_emulator("Nintendo Gameboy", "gb", "gb gbc lzma", RG_LOGO_PAD_GB, RG_LOGO_HEADER_GB, NO_GAME_DATA);
     add_emulator("Nintendo Gameboy Color", "gbc", "gb gbc lzma", RG_LOGO_PAD_GB, RG_LOGO_HEADER_GBC, NO_GAME_DATA);

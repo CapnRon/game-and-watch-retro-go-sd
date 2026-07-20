@@ -9,6 +9,7 @@
 #include "appid.h"
 #include "main.h"
 #include "rg_emulators.h"
+#include "favorites.h"
 #include "gui.h"
 #include "gittag.h"
 #include "gw_lcd.h"
@@ -451,6 +452,7 @@ static void GLOBAL_DATA handle_about_menu()
         if (odroid_overlay_confirm(curr_lang->s_Confirm_Reset_settings, false, &gui_redraw_callback) == 1)
         {
             odroid_settings_reset();
+            rg_favorites_reset();
             #if SD_CARD == 1
                 flash_alloc_reset();
             #endif

@@ -278,6 +278,7 @@ const lang_t lang_en_us LANG_DATA = {
     .s_Title_Date_Format = "%02d-%02d %s %02d:%02d:%02d",
     .s_Date_Format = "%02d.%02d.20%02d %s",
     .s_Time_Format = "%02d:%02d:%02d",
+    .s_favorite = "Favorite",
     .fmt_Title_Date_Format = en_us_fmt_Title_Date_Format,
     .fmtDate = en_us_fmt_Date,
     .fmtTime = en_us_fmt_Time,
