@@ -144,8 +144,8 @@ static bool LoadState(const char *savePathName)
             return false;
         }
 
-        size_t max_size = gb_max_payload_size(g_gb);
-        if (hdr.payload_size == 0 || hdr.payload_size > max_size) {
+        size_t expected = g_gb->get_state_size(GB_SAVESTATE_V1);
+        if (hdr.payload_size != expected) {
             fclose(file);
             return false;
         }
