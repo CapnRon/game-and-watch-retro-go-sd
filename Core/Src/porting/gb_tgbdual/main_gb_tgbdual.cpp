@@ -363,10 +363,10 @@ static void gb_process_blit()
     odroid_display_scaling_t scaling = odroid_display_get_scaling_mode();
     odroid_display_filter_t filtering = odroid_display_get_filter_mode();
 
-    /* SGB with border: composite 256×224 centered on the LCD (trial). */
+    /* SGB mode: always use the 256×224 layout once enabled so we don't
+     * flicker between scaled 160×144 and bordered output at boot / TRNs. */
     if (sgb_border_enabled &&
-        g_gb && g_gb->get_sgb() && g_gb->get_sgb()->enabled() &&
-        g_gb->get_sgb()->has_border() && tgb_buffer) {
+        g_gb && g_gb->get_sgb() && g_gb->get_sgb()->enabled() && tgb_buffer) {
         uint16_t *lcd = (uint16_t *)lcd_get_active_buffer();
         g_gb->get_sgb()->blit_frame(lcd, 320, 240,
                                     tgb_buffer, GB_WIDTH, GB_HEIGHT);
@@ -437,6 +437,8 @@ void gb_blit(uint16_t *buffer) {
 static bool reset_cb(odroid_dialog_choice_t *option, odroid_dialog_event_t event, uint32_t repeat)
 {
     if (event == ODROID_DIALOG_ENTER) {
+        /* Keep the UI console selection (GB/SGB/GBC) across soft reset. */
+        g_gb->set_console_mode(gb_console_mode);
         g_gb->reset();
         /* Custom DMG palettes only in pure GB mode — never overwrite SGB colors. */
         if (g_gb->get_rom()->get_info()->gb_type == 1)
