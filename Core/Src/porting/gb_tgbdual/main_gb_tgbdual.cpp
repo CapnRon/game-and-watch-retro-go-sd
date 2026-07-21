@@ -96,9 +96,14 @@ static size_t gb_max_payload_size(gb *core)
 {
     size_t a = core->get_state_size_for_type(GB_SAVESTATE_V0, 1);
     size_t b = core->get_state_size_for_type(GB_SAVESTATE_V0, 3);
-    size_t c = core->get_state_size(GB_SAVESTATE_V1);
+    size_t c = core->get_state_size_for_type(GB_SAVESTATE_V1, 1);
+    size_t d = core->get_state_size_for_type(GB_SAVESTATE_V1, 2);
+    size_t e = core->get_state_size_for_type(GB_SAVESTATE_V1, 3);
     size_t m = a > b ? a : b;
-    return c > m ? c : m;
+    if (c > m) m = c;
+    if (d > m) m = d;
+    if (e > m) m = e;
+    return m;
 }
 
 static bool SaveState(const char *savePathName)
@@ -152,7 +157,8 @@ static bool LoadState(const char *savePathName)
             return false;
         }
 
-        size_t expected = g_gb->get_state_size(GB_SAVESTATE_V1);
+        /* Size depends on saved gb_type (WRAM/VRAM + optional SGB blob). */
+        size_t expected = g_gb->get_state_size_for_type(GB_SAVESTATE_V1, (int)hdr.saved_gb_type);
         if (hdr.payload_size != expected) {
             fclose(file);
             return false;
