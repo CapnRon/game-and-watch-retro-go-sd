@@ -103,8 +103,13 @@ static size_t gb_max_payload_size(gb *core)
 
 static bool SaveState(const char *savePathName)
 {
-    // We store data in the not visible framebuffer
+    /* Scratch in the non-displayed buffer (active, after swap has settled).
+     * Must restore it afterwards: sleep wake's lcd_init() always points LTDC
+     * at fb1 first — if that buffer still holds savestate bytes, the top of
+     * the screen flashes garbage until the pause banner / next frame redraws
+     * (seen when sleeping from the options menu or the blinking Pause screen). */
     lcd_wait_for_vblank();
+    lcd_sleep_while_swap_pending();
     unsigned char *data = (unsigned char *)lcd_get_active_buffer();
     g_gb->save_state_mem((void *)data);
 
@@ -124,6 +129,9 @@ static bool SaveState(const char *savePathName)
     size_t w2 = fwrite(data, hdr.payload_size, 1, file);
 
     fclose(file);
+
+    /* Put the last displayed frame back into the scratch buffer. */
+    lcd_clone();
     return w1 == 1 && w2 == 1;
 }
 
