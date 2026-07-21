@@ -85,8 +85,6 @@ const lang_t lang_pt_pt LANG_DATA = {
     .s_md_Synchro_Vsync = "VSYNC",
     .s_md_Dithering = "Ruído Branco",
     .s_md_Debug_bar = "Barra de Debug",
-    .s_md_Option_ON = "\x6",
-    .s_md_Option_OFF = "\x5",
     .s_md_AudioFilter = "Filtro de Audio",
     .s_md_VideoUpscaler = "Resolução de Video",
     .s_md_Region = "Região",
@@ -147,6 +145,8 @@ const lang_t lang_pt_pt LANG_DATA = {
     //=====================================================================
 
     // Core\Src\porting\odroid_overlay.c ===================================
+    .s_Option_ON = "\x6",
+    .s_Option_OFF = "\x5",
     .s_Full = "\x7",
     .s_Fill = "\x8",
     .s_No_Cover = "Sem capa",
@@ -214,8 +214,6 @@ const lang_t lang_pt_pt LANG_DATA = {
 #if CHEAT_CODES == 1
     .s_Cheat_Codes = "Código de Batota",
     .s_Cheat_Codes_Title = "Opções de Batota",
-    .s_Cheat_Codes_ON = "\x6",
-    .s_Cheat_Codes_OFF = "\x5",
 #endif
     //=====================================================================
 

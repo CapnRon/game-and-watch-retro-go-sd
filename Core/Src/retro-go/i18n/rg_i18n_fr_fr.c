@@ -85,8 +85,6 @@ const lang_t lang_fr_fr LANG_DATA = {
     .s_md_Synchro_Vsync = "VSYNC",
     .s_md_Dithering = "Dithering",
     .s_md_Debug_bar = "Debug bar",
-    .s_md_Option_ON = "\x6",
-    .s_md_Option_OFF = "\x5",
     .s_md_AudioFilter = "Audio Filter",
     .s_md_VideoUpscaler = "Video Upscaler",
     .s_md_Region = "Région",
@@ -147,6 +145,8 @@ const lang_t lang_fr_fr LANG_DATA = {
     //=====================================================================
 
     // Core\Src\porting\odroid_overlay.c ===================================
+    .s_Option_ON = "\x6",
+    .s_Option_OFF = "\x5",
     .s_Full = "\x7",
     .s_Fill = "\x8",
     .s_No_Cover = "Pas d'image",
@@ -214,8 +214,6 @@ const lang_t lang_fr_fr LANG_DATA = {
 #if CHEAT_CODES == 1
     .s_Cheat_Codes = "Codes de triche",
     .s_Cheat_Codes_Title = "Options de triche",
-    .s_Cheat_Codes_ON = "\x6",
-    .s_Cheat_Codes_OFF = "\x5",
 #endif
     //=====================================================================
 

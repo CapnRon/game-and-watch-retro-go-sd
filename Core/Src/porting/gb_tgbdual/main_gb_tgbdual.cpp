@@ -599,22 +599,23 @@ static int gb_console_next(int mode, int dir)
 
 static bool system_update_cb(odroid_dialog_choice_t *option, odroid_dialog_event_t event, uint32_t repeat)
 {
-    if (event == ODROID_DIALOG_PREV)
-        gb_console_mode = gb_console_next(gb_console_mode, -1);
-    if (event == ODROID_DIALOG_NEXT)
-        gb_console_mode = gb_console_next(gb_console_mode, +1);
-
     if (event == ODROID_DIALOG_PREV || event == ODROID_DIALOG_NEXT) {
-        odroid_settings_app_int32_set("GBSystem", gb_console_mode);
-        g_gb->set_console_mode(gb_console_mode);
-        g_gb->reset();
-        /* GB: restore user palette. SGB/GBC: leave default / let the game paint. */
-        if (g_gb->get_rom()->get_info()->gb_type == 1)
-            g_gb->get_lcd()->set_palette(index_palette);
-        if (tgb_buffer && g_gb->get_rom()->get_info()->gb_type < 3) {
-            g_gb->get_lcd()->clear_win_count();
-            for (int y = 0; y < GB_HEIGHT; y++)
-                g_gb->get_lcd()->render(tgb_buffer, y);
+        int prev = gb_console_mode;
+        gb_console_mode = gb_console_next(gb_console_mode,
+                                          event == ODROID_DIALOG_NEXT ? +1 : -1);
+        /* Single choice (GB-only / GBC-only): left/right is a no-op — skip reset. */
+        if (gb_console_mode != prev) {
+            odroid_settings_app_int32_set("GBSystem", gb_console_mode);
+            g_gb->set_console_mode(gb_console_mode);
+            g_gb->reset();
+            /* GB: restore user palette. SGB/GBC: leave default / let the game paint. */
+            if (g_gb->get_rom()->get_info()->gb_type == 1)
+                g_gb->get_lcd()->set_palette(index_palette);
+            if (tgb_buffer && g_gb->get_rom()->get_info()->gb_type < 3) {
+                g_gb->get_lcd()->clear_win_count();
+                for (int y = 0; y < GB_HEIGHT; y++)
+                    g_gb->get_lcd()->render(tgb_buffer, y);
+            }
         }
     }
 
@@ -671,7 +672,8 @@ static bool sgb_border_update_cb(odroid_dialog_choice_t *option,
     }
 
     snprintf(option->value, 16, "%s",
-             sgb_border_enabled ? curr_lang->s_Yes : curr_lang->s_No);
+             sgb_border_enabled ? curr_lang->s_Option_ON
+                                : curr_lang->s_Option_OFF);
     return event == ODROID_DIALOG_ENTER;
 }
 

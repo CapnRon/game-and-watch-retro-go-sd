@@ -66,8 +66,6 @@ typedef struct
     const char *s_md_Synchro_Vsync;
     const char *s_md_Dithering;
     const char *s_md_Debug_bar;
-    const char *s_md_Option_ON;
-    const char *s_md_Option_OFF;
     const char *s_md_AudioFilter;
     const char *s_md_VideoUpscaler;
     const char *s_md_Region;
@@ -127,6 +125,8 @@ typedef struct
     const char *s_filter_2_high;
     //=====================================================================
     // Core\Src\porting\odroid_overlay.c ===================================
+    const char *s_Option_ON;   /* toggle glyph \x6 */
+    const char *s_Option_OFF;  /* toggle glyph \x5 */
     const char *s_Full;
     const char *s_Fill;
     const char *s_No_Cover;
@@ -193,8 +193,6 @@ typedef struct
 #if CHEAT_CODES == 1
     const char *s_Cheat_Codes;
     const char *s_Cheat_Codes_Title;
-    const char *s_Cheat_Codes_ON;
-    const char *s_Cheat_Codes_OFF;
 #endif    
     //=====================================================================
     // Core\Src\retro-go\rg_main.c =========================================

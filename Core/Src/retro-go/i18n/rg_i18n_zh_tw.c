@@ -48,8 +48,6 @@ const lang_t lang_zh_tw LANG_DATA = {
     .s_md_Synchro_Vsync = "影像",
     .s_md_Dithering = "抖動顯示",
     .s_md_Debug_bar = "測試資訊",
-    .s_md_Option_ON = "\x6",
-    .s_md_Option_OFF = "\x5",
     .s_md_AudioFilter = "音訊強化",
     .s_md_VideoUpscaler = "影像強化",
     .s_md_Region = "地區",
@@ -144,6 +142,8 @@ const lang_t lang_zh_tw LANG_DATA = {
     //=====================================================================
 
     // Core\Src\porting\odroid_overlay.c ===================================
+    .s_Option_ON = "\x6",
+    .s_Option_OFF = "\x5",
     .s_Full = "\x7",
     .s_Fill = "\x8",
 
@@ -215,8 +215,6 @@ const lang_t lang_zh_tw LANG_DATA = {
 #if CHEAT_CODES == 1
     .s_Cheat_Codes = "金手指碼",
     .s_Cheat_Codes_Title = "金手指",
-    .s_Cheat_Codes_ON = "\x6",
-    .s_Cheat_Codes_OFF = "\x5",
 #endif
 
     //=====================================================================
