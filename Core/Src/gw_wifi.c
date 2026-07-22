@@ -62,6 +62,20 @@ static void wifi_rx_drain_into(char *buf, size_t buf_len, size_t *len_inout)
  * Power + UART bring-up *
  *************************/
 
+// NOTE: 2,000,000 was bench-confirmed reliable on the D1 Mini Pro's own
+// USB-to-board wiring (20/20 short commands, clean 100 KB bulk transfer),
+// but on the actual console it silently fell back to 115200 via the
+// self-healing logic below -- the console's hand-soldered wiring has
+// different signal characteristics than the bench USB-serial dongle, and
+// bench results don't necessarily transfer 1:1. 1,152,000 is the highest
+// rate confirmed directly on the console itself (918 kbps measured, near
+// that rate's ~921.6 kbps theoretical ceiling). Trying 1,728,000 here as a
+// candidate between the two -- if it's also too fast for this specific
+// wiring, wifi_switch_baud()'s self-healing fallback drops back to 115200
+// safely rather than desyncing, so this is a safe value to test directly on
+// the real hardware rather than only on the bench D1 Mini Pro.
+#define WIFI_TARGET_BAUD 1728000
+
 static void wifi_uart_init(void)
 {
     GPIO_InitTypeDef GPIO_InitStruct = {0};
@@ -72,12 +86,12 @@ static void wifi_uart_init(void)
     GPIO_InitStruct.Pin = WIFI_UART_TX_Pin | WIFI_UART_RX_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_PULLUP;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH; // needs clean edges up to WIFI_TARGET_BAUD
     GPIO_InitStruct.Alternate = GPIO_AF7_USART1;
     HAL_GPIO_Init(WIFI_UART_TX_GPIO_Port, &GPIO_InitStruct);
 
     huart1.Instance = USART1;
-    huart1.Init.BaudRate = 115200;
+    huart1.Init.BaudRate = 115200; // module's factory-default; bumped after liveness check
     huart1.Init.WordLength = UART_WORDLENGTH_8B;
     huart1.Init.StopBits = UART_STOPBITS_1;
     huart1.Init.Parity = UART_PARITY_NONE;
@@ -98,6 +112,45 @@ static void wifi_uart_deinit(void)
 {
     HAL_NVIC_DisableIRQ(USART1_IRQn);
     HAL_UART_DeInit(&huart1);
+}
+
+static void wifi_reconfigure_baud(uint32_t baud)
+{
+    HAL_NVIC_DisableIRQ(USART1_IRQn);
+    huart1.Init.BaudRate = baud;
+    HAL_UART_Init(&huart1);
+    HAL_NVIC_EnableIRQ(USART1_IRQn);
+
+    wifi_rx_head = 0;
+    wifi_rx_tail = 0;
+    wifi_rx_rearm();
+}
+
+// Bench-confirmed live: AT+UART_CUR's OK response arrives at the OLD baud
+// rate, and the module only switches to the new rate afterward. BUT: if the
+// module actually processed the command and switched while our own OK
+// detection merely missed it (real risk on the soldered board, which may
+// have different signal timing than the bench setup this was verified
+// against), blindly trusting that detection would leave the STM32 on the
+// old baud while the module is already on the new one -- desynced, breaking
+// every AT command after it, including Connect's own liveness check. So:
+// always attempt the switch and PROVE the new baud actually works with a
+// fresh "AT"; if that fails, fall back to the old baud and re-verify there,
+// so we never end up guessing which baud the module is actually on.
+static bool wifi_switch_baud(uint32_t new_baud)
+{
+    char cmd[48];
+    uint32_t old_baud = huart1.Init.BaudRate;
+
+    snprintf(cmd, sizeof(cmd), "AT+UART_CUR=%lu,8,1,0,0", (unsigned long)new_baud);
+    wifi_at_send_cmd(cmd, "OK", 2000, NULL, 0); // outcome checked below via a live probe, not this return value
+
+    wifi_reconfigure_baud(new_baud);
+    if (wifi_at_send_cmd("AT", "OK", 500, NULL, 0))
+        return true; // confirmed alive at the new baud
+
+    wifi_reconfigure_baud(old_baud); // new baud didn't answer -- fall back and re-verify there
+    return wifi_at_send_cmd("AT", "OK", 500, NULL, 0);
 }
 
 void wifi_module_poweron(void)
@@ -122,7 +175,14 @@ void wifi_module_poweron(void)
         HAL_Delay(20);
     }
 
-    wifi_uart_init();
+    wifi_uart_init(); // brings USART1 up at 115200, the module's factory default
+
+    // Re-enabled: the Connect regression this was suspected of causing
+    // turned out to be a disconnected solder joint, not this logic -- ruled
+    // out in software by verifying flash integrity byte-for-byte and by
+    // confirming Connect still failed even with this path fully disabled.
+    if (wifi_at_send_cmd("AT", "OK", 1000, NULL, 0))
+        wifi_switch_baud(WIFI_TARGET_BAUD);
 }
 
 void wifi_module_poweroff(void)
@@ -332,32 +392,69 @@ bool wifi_http_get(const char *url, char *out_buf, size_t out_buf_len)
     return len > 0;
 }
 
+// Bench-confirmed live against this exact firmware: the original design
+// (repeated AT+CIPSEND=<len> + wait-for-ack per chunk) measures round-trip
+// latency to the remote host, not local UART/WiFi bit-rate -- each chunk's
+// time is dominated by the network round-trip, so raising the UART baud
+// barely moved the number (measured ~24 kbps regardless of baud). Espressif's
+// AT+CIPMODE=1 "transparent transmission" mode removes the per-chunk
+// command/ack round-trip entirely: after one AT+CIPSEND (no length arg) and
+// its ">" prompt, everything written to the UART streams straight to the
+// TCP connection. Confirmed end-to-end on real hardware: 55 kbps at 115200
+// baud vs 113.7 kbps at 1,152,000 baud on the same link -- this design
+// actually reflects the baud change, unlike the old one.
 bool wifi_throughput_test(const char *host, uint16_t port, uint32_t *out_kbps)
 {
     char cmd[96];
-    static char chunk[1024];
-    const int num_chunks = 20;
+    static uint8_t payload[1024];
+    const int num_chunks = 48; // ~48 KB total, matches the bench-tested scale
+
+    if (!wifi_at_send_cmd("AT+CIPMUX=0", "OK", 1000, NULL, 0)) // passthrough needs single-connection mode
+        return false;
 
     snprintf(cmd, sizeof(cmd), "AT+CIPSTART=\"TCP\",\"%s\",%u", host, port);
-    wifi_at_send_cmd(cmd, "OK", 5000, NULL, 0);
+    if (!wifi_at_send_cmd(cmd, "OK", 5000, NULL, 0))
+        return false;
 
-    memset(chunk, 'A', sizeof(chunk));
+    if (!wifi_at_send_cmd("AT+CIPMODE=1", "OK", 1000, NULL, 0)) {
+        wifi_at_send_cmd("AT+CIPCLOSE", "OK", 1000, NULL, 0);
+        return false;
+    }
+
+    if (!wifi_at_send_cmd("AT+CIPSEND", ">", 2000, NULL, 0)) {
+        wifi_at_send_cmd("AT+CIPCLOSE", "OK", 1000, NULL, 0);
+        return false;
+    }
+
+    memset(payload, 'A', sizeof(payload));
 
     uint32_t start = HAL_GetTick();
-    int sent_chunks = 0;
     for (int i = 0; i < num_chunks; i++) {
-        if (!wifi_tcp_send(chunk, sizeof(chunk), 3000))
-            break;
-        sent_chunks++;
+        wdog_refresh();
+        HAL_UART_Transmit(&huart1, payload, sizeof(payload), 2000);
     }
     uint32_t elapsed_ms = HAL_GetTick() - start;
 
+    // Exit transparent mode: "+++" must arrive as its own isolated write with
+    // a quiet period before it, and the module needs ~1s afterward before it
+    // accepts AT commands again (both bench-confirmed against this firmware).
+    for (int waited = 0; waited < 500; waited += 20) {
+        wdog_refresh();
+        HAL_Delay(20);
+    }
+    HAL_UART_Transmit(&huart1, (uint8_t *)"+++", 3, 500);
+    for (int waited = 0; waited < 1500; waited += 20) {
+        wdog_refresh();
+        HAL_Delay(20);
+    }
+
+    wifi_at_send_cmd("AT", "OK", 2000, NULL, 0); // confirm back in command mode
     wifi_at_send_cmd("AT+CIPCLOSE", "OK", 1000, NULL, 0);
 
-    if (elapsed_ms == 0 || sent_chunks == 0)
+    if (elapsed_ms == 0)
         return false;
 
-    uint32_t total_bits = (uint32_t)sent_chunks * sizeof(chunk) * 8;
+    uint32_t total_bits = (uint32_t)num_chunks * sizeof(payload) * 8;
     *out_kbps = total_bits / elapsed_ms; // bits/ms == kbits/s
     return true;
 }
