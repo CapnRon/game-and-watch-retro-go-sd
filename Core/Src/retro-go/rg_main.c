@@ -16,6 +16,7 @@
 #include "gw_buttons.h"
 #include "gw_flash.h"
 #include "gw_sdcard.h"
+#include "gw_wifi.h"
 #include "rg_rtc.h"
 #include "rg_i18n.h"
 #include "odroid_overlay.h"
@@ -493,6 +494,8 @@ static void GLOBAL_DATA handle_options_menu()
         ODROID_DIALOG_CHOICE_SEPARATOR,
         {0, curr_lang->s_CPU_Overclock, ov_value, 1, &main_menu_cpu_oc_cb},
         ODROID_DIALOG_CHOICE_SEPARATOR,
+        {11, "WiFi Tools", "", 1, NULL},
+        ODROID_DIALOG_CHOICE_SEPARATOR,
         {10, curr_lang->s_Power_off, "", 1, NULL},
         ODROID_DIALOG_CHOICE_LAST, // Reserve space to dynamically add more options
         ODROID_DIALOG_CHOICE_LAST};
@@ -517,6 +520,9 @@ static void GLOBAL_DATA handle_options_menu()
         case 10:
         odroid_system_shutdown();
         odroid_system_sleep_ex(SLEEP_ENTER_STANDBY | SLEEP_SHOW_LOGO | SLEEP_SHOW_ANIMATION | SLEEP_ANIMATION_SLOW, NULL);
+        break;
+        case 11:
+        wifi_tools_screen();
         break;
     }
 }

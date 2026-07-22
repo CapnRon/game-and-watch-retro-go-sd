@@ -511,10 +511,16 @@ void SystemClock_Config(uint8_t oc_level)
   {
     Error_Handler();
   }
+  // RCC_PERIPHCLK_USART16 was hand-added for the ESP8266 WiFi module's
+  // USART1 -- this isn't in the CubeMX .ioc, so a future regeneration of this
+  // function from the .ioc will silently drop it. Re-add it if that happens.
+  // USART1/6 share the USART16 mux (APB2/D2PCLK2) -- different from
+  // USART2/3/4/5/7/8's USART234578 mux (APB1/D2PCLK1).
   PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_RTC|RCC_PERIPHCLK_LTDC
                               |RCC_PERIPHCLK_SPI123|RCC_PERIPHCLK_SAI1
                               |RCC_PERIPHCLK_ADC|RCC_PERIPHCLK_OSPI
-                              |RCC_PERIPHCLK_CKPER;
+                              |RCC_PERIPHCLK_CKPER|RCC_PERIPHCLK_USART16;
+  PeriphClkInitStruct.Usart16ClockSelection = RCC_USART16CLKSOURCE_D2PCLK2;
   PeriphClkInitStruct.PLL2.PLL2M = 25;
   PeriphClkInitStruct.PLL2.PLL2N = 192;
   PeriphClkInitStruct.PLL2.PLL2P = 5;

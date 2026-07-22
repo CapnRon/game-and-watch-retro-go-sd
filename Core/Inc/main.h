@@ -225,6 +225,20 @@ int odroid_overlay_draw_text_line(uint16_t x_pos, uint16_t y_pos, uint16_t width
 #define GPIO_FLASH_MISO_GPIO_Port GPIOD
 #endif
 
+// ESP8266 WiFi module: USART1 AT-command interface + MOSFET power gate.
+// PB3/PB4 were the original choice but conflict with SPI1 (SD card SCK/MISO,
+// see HAL_SPI_MspInit() in stm32h7xx_hal_msp.c -- hand-added there, not in
+// the .ioc, which is exactly why the first pin survey missed it). PB6/PB7
+// are confirmed clear against every hand-coded GPIO_Init in this project
+// (main.c, stm32h7xx_hal_msp.c, gw_sdcard.c) and are USART1's standard AF7
+// remap pair.
+#define WIFI_PWR_GPIO_Port GPIOC
+#define WIFI_PWR_Pin GPIO_PIN_2
+#define WIFI_UART_TX_GPIO_Port GPIOB
+#define WIFI_UART_TX_Pin GPIO_PIN_6
+#define WIFI_UART_RX_GPIO_Port GPIOB
+#define WIFI_UART_RX_Pin GPIO_PIN_7
+
 // Zelda only buttons; they are not connected on mario.
 #define BTN_START_Pin GPIO_PIN_11
 #define BTN_START_GPIO_Port GPIOC
