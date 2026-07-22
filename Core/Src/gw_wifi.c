@@ -1,9 +1,11 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #include "main.h"
 #include "gw_wifi.h"
 #include "ff.h"
+#include "rg_rtc.h"
 
 UART_HandleTypeDef huart1;
 
@@ -255,7 +257,7 @@ bool wifi_connect_cb(const wifi_cfg_t *cfg, wifi_status_t *status, wifi_poll_cb_
     return true;
 }
 
-bool wifi_ping(const char *host, int *rtt_ms)
+bool wifi_ping_cb(const char *host, int *rtt_ms, wifi_poll_cb_t poll_cb, void *ctx)
 {
     char cmd[96];
     char resp[128];
@@ -268,7 +270,7 @@ bool wifi_ping(const char *host, int *rtt_ms)
     // so wait for "OK" (loop already breaks early on "ERROR" too) and only
     // search for the result '+' in the buffer *after* the echoed command.
     snprintf(cmd, sizeof(cmd), "AT+PING=\"%s\"", host);
-    wifi_at_send_cmd(cmd, "OK", 3000, resp, sizeof(resp));
+    wifi_at_send_cmd_cb(cmd, "OK", 3000, resp, sizeof(resp), poll_cb, ctx);
 
     size_t echolen = strlen(cmd);
     if (strlen(resp) <= echolen)
@@ -360,6 +362,60 @@ bool wifi_throughput_test(const char *host, uint16_t port, uint32_t *out_kbps)
     return true;
 }
 
+bool wifi_sync_time(int tz_offset_hours, struct tm *out_tm)
+{
+    static char resp[256];
+
+    if (!wifi_at_send_cmd("AT+CIPSTART=\"TCP\",\"time.nist.gov\",13", "OK", 5000, NULL, 0))
+        return false;
+
+    // Daytime protocol: the server sends its response immediately on
+    // connect, unprompted -- no request needed from us, just drain and
+    // wait for the +IPD,<len>: framed line to show up.
+    resp[0] = '\0';
+    size_t len = 0;
+    uint32_t start = HAL_GetTick();
+    while ((HAL_GetTick() - start) < 3000) {
+        wdog_refresh();
+        wifi_rx_drain_into(resp, sizeof(resp), &len);
+        if (strstr(resp, "+IPD,"))
+            break;
+        HAL_Delay(20);
+    }
+
+    wifi_at_send_cmd("AT+CIPCLOSE", "OK", 1000, NULL, 0);
+
+    char *body = strstr(resp, "+IPD,");
+    if (!body)
+        return false;
+    body = strchr(body, ':');
+    if (!body)
+        return false;
+    body++;
+
+    // NIST Daytime format (NIST SP250-59, stable for decades):
+    //   JJJJJ YY-MM-DD HH:MM:SS TT L H msADV UTC(NIST) OTM
+    // e.g. "57054 15-02-01 20:40:40 00 0 0 832.3 UTC(NIST) *"
+    int mjd, yy, mon, day, hh, mi, ss;
+    if (sscanf(body, "%d %2d-%2d-%2d %2d:%2d:%2d",
+               &mjd, &yy, &mon, &day, &hh, &mi, &ss) != 7)
+        return false;
+
+    struct tm tm = {0};
+    tm.tm_year = (2000 + yy) - 1900;
+    tm.tm_mon = mon - 1;
+    tm.tm_mday = day;
+    tm.tm_hour = hh + tz_offset_hours; // may go out of [0,23]; mktime() normalizes below
+    tm.tm_min = mi;
+    tm.tm_sec = ss;
+
+    mktime(&tm); // normalizes tm in place (day/month/year rollover from the offset)
+    GW_SetUnixTM(&tm);
+
+    if (out_tm) *out_tm = tm;
+    return true;
+}
+
 /*************************
  * /wifi.cfg parsing     *
  *************************/
@@ -373,6 +429,8 @@ bool wifi_cfg_load(wifi_cfg_t *cfg)
     memset(cfg, 0, sizeof(*cfg));
     strcpy(cfg->ping_host, "8.8.8.8");
     strcpy(cfg->http_url, "http://example.com/");
+    strcpy(cfg->throughput_host, "tcpbin.com");
+    cfg->throughput_port = 4242;
 
     if (f_open(&f, "/wifi.cfg", FA_READ) != FR_OK)
         return false;
@@ -392,6 +450,9 @@ bool wifi_cfg_load(wifi_cfg_t *cfg)
             else if (!strcmp(key, "password"))  strncpy(cfg->password, val, sizeof(cfg->password) - 1);
             else if (!strcmp(key, "ping_host")) strncpy(cfg->ping_host, val, sizeof(cfg->ping_host) - 1);
             else if (!strcmp(key, "http_url"))  strncpy(cfg->http_url, val, sizeof(cfg->http_url) - 1);
+            else if (!strcmp(key, "throughput_host")) strncpy(cfg->throughput_host, val, sizeof(cfg->throughput_host) - 1);
+            else if (!strcmp(key, "throughput_port")) cfg->throughput_port = atoi(val);
+            else if (!strcmp(key, "tz_offset_hours")) cfg->tz_offset_hours = atoi(val);
         }
         line = strtok_r(NULL, "\r\n", &saveptr);
     }

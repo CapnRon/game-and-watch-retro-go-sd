@@ -1,5 +1,6 @@
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 #include "main.h"
 #include "gw_wifi.h"
 #include "gw_lcd.h"
@@ -27,6 +28,7 @@ static void wifi_screen_do_connect(void);
 static void wifi_screen_do_ping(void);
 static void wifi_screen_do_http_get(void);
 static void wifi_screen_do_throughput(void);
+static void wifi_screen_do_sync_time(void);
 
 /* Shared result screen: draws a title + a handful of text lines, then waits
  * for A (retry, if allow_retry) or B (back), petting the watchdog and
@@ -110,23 +112,76 @@ static void wifi_screen_do_connect(void)
     } while (retry);
 }
 
+// Continuously pings g_wifi.cfg.ping_host, like a standard `ping` command's
+// scrolling seq/time output plus a running sent/recv/loss and min/avg/max
+// summary, until the user presses B. wifi_connect_cancel_poll is reused here
+// (it only checks ODROID_INPUT_B, nothing connect-specific) so B interrupts
+// even mid-ping, not just between pings.
 static void wifi_screen_do_ping(void)
 {
-    bool retry;
-    do {
+    enum { PING_MAX_LINES = 18, LINE_WIDTH = 40 };
+    static char lines[PING_MAX_LINES][LINE_WIDTH];
+    int line_count = 0;
+    int seq = 0, sent = 0, recv = 0;
+    int rtt_min = -1, rtt_max = -1;
+    long rtt_sum = 0;
+    char title[72];
+
+    snprintf(title, sizeof(title), "Ping: %s", g_wifi.cfg.ping_host);
+
+    while (!wifi_connect_cancel_poll(NULL)) {
+        seq++;
+        sent++;
         int rtt = -1;
-        bool ok = wifi_ping(g_wifi.cfg.ping_host, &rtt);
+        bool ok = wifi_ping_cb(g_wifi.cfg.ping_host, &rtt, wifi_connect_cancel_poll, NULL);
 
-        char l0[72], l1[64];
-        snprintf(l0, sizeof(l0), "Host: %s", g_wifi.cfg.ping_host);
+        if (ok) {
+            recv++;
+            rtt_sum += rtt;
+            if (rtt_min < 0 || rtt < rtt_min) rtt_min = rtt;
+            if (rtt > rtt_max) rtt_max = rtt;
+        }
+
+        char *dst;
+        if (line_count < PING_MAX_LINES) {
+            dst = lines[line_count++];
+        } else {
+            for (int i = 1; i < PING_MAX_LINES; i++)
+                memcpy(lines[i - 1], lines[i], LINE_WIDTH);
+            dst = lines[PING_MAX_LINES - 1];
+        }
         if (ok)
-            snprintf(l1, sizeof(l1), "RTT: %d ms", rtt);
+            snprintf(dst, LINE_WIDTH, "seq=%d time=%dms", seq, rtt);
         else
-            snprintf(l1, sizeof(l1), "Ping failed / timeout");
+            snprintf(dst, LINE_WIDTH, "seq=%d timeout", seq);
 
-        const char *lines[2] = { l0, l1 };
-        retry = wifi_show_result("Ping Test", lines, 2, true);
-    } while (retry);
+        odroid_overlay_draw_fill_rect(0, 0, GW_LCD_WIDTH, GW_LCD_HEIGHT, curr_colors->bg_c);
+        odroid_overlay_draw_text_line(4, 4, GW_LCD_WIDTH - 8, title, C_WHITE, curr_colors->bg_c);
+        for (int i = 0; i < line_count; i++)
+            odroid_overlay_draw_text_line(4, 18 + i * 9, GW_LCD_WIDTH - 8, lines[i], C_WHITE, curr_colors->bg_c);
+
+        int loss_pct = (100 * (sent - recv)) / sent;
+        int avg = recv > 0 ? (int)(rtt_sum / recv) : 0;
+        char stats1[48], stats2[48];
+        snprintf(stats1, sizeof(stats1), "Sent=%d Recv=%d Loss=%d%%", sent, recv, loss_pct);
+        snprintf(stats2, sizeof(stats2), "min/avg/max=%d/%d/%d ms",
+                 rtt_min < 0 ? 0 : rtt_min, avg, rtt_max < 0 ? 0 : rtt_max);
+        odroid_overlay_draw_text_line(4, GW_LCD_HEIGHT - 32, GW_LCD_WIDTH - 8, stats1, C_WHITE, curr_colors->bg_c);
+        odroid_overlay_draw_text_line(4, GW_LCD_HEIGHT - 22, GW_LCD_WIDTH - 8, stats2, C_WHITE, curr_colors->bg_c);
+        odroid_overlay_draw_text_line(4, GW_LCD_HEIGHT - 12, GW_LCD_WIDTH - 8, "B: Stop", C_RED, curr_colors->bg_c);
+
+        wdog_refresh();
+        lcd_sync();
+        lcd_swap();
+
+        // Pace like a standard ping (~1 request/sec), checking for B throughout.
+        for (int waited = 0; waited < 800; waited += 20) {
+            wdog_refresh();
+            if (wifi_connect_cancel_poll(NULL))
+                return;
+            HAL_Delay(20);
+        }
+    }
 }
 
 static void wifi_screen_do_http_get(void)
@@ -155,24 +210,16 @@ static void wifi_screen_do_throughput(void)
 {
     bool retry;
     do {
-        char host[64] = {0};
-        const char *p = g_wifi.cfg.http_url;
-        if (strncmp(p, "http://", 7) == 0) p += 7;
-        const char *slash = strchr(p, '/');
-        size_t hostlen = slash ? (size_t)(slash - p) : strlen(p);
-        if (hostlen >= sizeof(host)) hostlen = sizeof(host) - 1;
-        memcpy(host, p, hostlen);
-
         odroid_overlay_draw_fill_rect(0, 0, GW_LCD_WIDTH, GW_LCD_HEIGHT, curr_colors->bg_c);
         odroid_overlay_draw_text_line(4, 4, GW_LCD_WIDTH - 8, "Throughput Test - sending...", C_WHITE, curr_colors->bg_c);
         lcd_sync();
         lcd_swap();
 
         uint32_t kbps = 0;
-        bool ok = wifi_throughput_test(host, 80, &kbps);
+        bool ok = wifi_throughput_test(g_wifi.cfg.throughput_host, (uint16_t)g_wifi.cfg.throughput_port, &kbps);
 
-        char l0[64], l1[64];
-        snprintf(l0, sizeof(l0), "Host: %s", host);
+        char l0[80], l1[64];
+        snprintf(l0, sizeof(l0), "Host: %s:%d", g_wifi.cfg.throughput_host, g_wifi.cfg.throughput_port);
         if (ok)
             snprintf(l1, sizeof(l1), "Throughput: %lu kbps (UART-limited)", (unsigned long)kbps);
         else
@@ -180,6 +227,29 @@ static void wifi_screen_do_throughput(void)
 
         const char *lines[2] = { l0, l1 };
         retry = wifi_show_result("Throughput Test", lines, 2, true);
+    } while (retry);
+}
+
+static void wifi_screen_do_sync_time(void)
+{
+    bool retry;
+    do {
+        struct tm tm;
+        bool ok = wifi_sync_time(g_wifi.cfg.tz_offset_hours, &tm);
+
+        char l0[64], l1[64];
+        if (ok) {
+            snprintf(l0, sizeof(l0), "Set: %04d-%02d-%02d %02d:%02d:%02d",
+                     tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                     tm.tm_hour, tm.tm_min, tm.tm_sec);
+            snprintf(l1, sizeof(l1), "(NIST UTC%+d applied)", g_wifi.cfg.tz_offset_hours);
+        } else {
+            snprintf(l0, sizeof(l0), "Sync failed");
+            l1[0] = '\0';
+        }
+
+        const char *lines[2] = { l0, l1 };
+        retry = wifi_show_result("Sync Time (NIST)", lines, ok ? 2 : 1, true);
     } while (retry);
 }
 
@@ -197,6 +267,7 @@ void wifi_tools_screen(void)
             {2, "Ping Test", "", g_wifi.connected ? 1 : 0, NULL},
             {3, "HTTP GET Test", "", g_wifi.connected ? 1 : 0, NULL},
             {4, "Throughput Test", "", g_wifi.connected ? 1 : 0, NULL},
+            {5, "Sync Time (NIST)", "", g_wifi.connected ? 1 : 0, NULL},
             ODROID_DIALOG_CHOICE_SEPARATOR,
             {0, "Back", "", 1, NULL},
             ODROID_DIALOG_CHOICE_LAST};
@@ -207,6 +278,7 @@ void wifi_tools_screen(void)
             case 2: wifi_screen_do_ping(); break;
             case 3: wifi_screen_do_http_get(); break;
             case 4: wifi_screen_do_throughput(); break;
+            case 5: wifi_screen_do_sync_time(); break;
             default: exit_screen = true; break;
         }
     }

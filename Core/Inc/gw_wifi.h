@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 #include "stm32h7xx_hal.h"
 
 extern UART_HandleTypeDef huart1;
@@ -13,6 +14,9 @@ typedef struct {
     char password[65];
     char ping_host[64];
     char http_url[128];
+    char throughput_host[64]; // needs a raw-byte-accepting echo service, not a real HTTP server
+    int throughput_port;
+    int tz_offset_hours; // applied to NIST's UTC response before setting the RTC
     bool valid;
 } wifi_cfg_t;
 
@@ -49,9 +53,14 @@ static inline bool wifi_at_send_cmd(const char *cmd, const char *expect_substr, 
 bool wifi_tcp_send(const char *payload, size_t len, uint32_t timeout_ms);
 
 bool wifi_connect_cb(const wifi_cfg_t *cfg, wifi_status_t *status, wifi_poll_cb_t poll_cb, void *ctx);
-bool wifi_ping(const char *host, int *rtt_ms);
+bool wifi_ping_cb(const char *host, int *rtt_ms, wifi_poll_cb_t poll_cb, void *ctx);
 bool wifi_http_get(const char *url, char *out_buf, size_t out_buf_len);
 bool wifi_throughput_test(const char *host, uint16_t port, uint32_t *out_kbps);
+
+// Fetches time.nist.gov's Daytime-protocol (port 13) response, applies
+// tz_offset_hours, and sets the console's RTC via GW_SetUnixTM(). On success
+// *out_tm holds the (already offset-adjusted, normalized) time that was set.
+bool wifi_sync_time(int tz_offset_hours, struct tm *out_tm);
 
 // The on-device configurator/testing toolkit screen, launched from the
 // Options menu. Handles its own module power-on/off.
