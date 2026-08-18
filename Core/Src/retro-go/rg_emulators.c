@@ -113,10 +113,15 @@ static size_t load_core_bin_with_header(const char *file_path, uint8_t *dest_add
     if (header_version != INTERNAL_CORE_HEADER_VERSION) goto fail;
     if (header_length < 1) goto fail;
     uint8_t tag_len = header_data[0];
-    size_t expected_tag_len = strlen(GIT_TAG);
-    if ((uint16_t)(1u + tag_len) > header_length ||
-        tag_len != expected_tag_len ||
-        memcmp(&header_data[1], GIT_TAG, tag_len) != 0) goto fail;
+    // PSRAM-only dev branch: the git tag embedded in prebuilt cores goes
+    // stale every time the firmware's git state changes, rejecting
+    // otherwise-fine cores with a "reinstall" screen. Warn on mismatch
+    // instead of failing.
+    if ((uint16_t)(1u + tag_len) > header_length) goto fail;
+    if (tag_len != strlen(GIT_TAG) ||
+        memcmp(&header_data[1], GIT_TAG, tag_len) != 0) {
+      printf("CORE: git tag mismatch '%s' (core built from another revision)\n", file_path);
+    }
   } else if (header_version < EXTERNAL_CORE_HEADER_MIN_VERSION) {
     goto fail;
   }

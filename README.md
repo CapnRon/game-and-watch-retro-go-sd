@@ -106,6 +106,13 @@ flash**. The NOR chip has been physically removed and replaced with an
 
 - **Volatile storage**: littlefs sits in PSRAM, so settings and save states
   are lost on power-off. (Saves could be moved to the SD in future work.)
+- **Erase is a memset**: the PSRAM erase contract ("reads return 0xFF") is
+  satisfied with a direct memset through the memory-mapped window instead
+  of NOR erase opcodes. No wear leveling or erase-before-write needed on
+  RAM.
+- **Core tag check relaxed**: the prebuilt cores embed the firmware git
+  tag; a mismatch only warns instead of showing the "reinstall" screen,
+  since the tag changes on every commit on this dev branch.
 - **CRS disabled**: the Clock Recovery System config in
   `SystemClock_Config()` is compiled out (`#if 0`); it faulted on this
   board. USB/audio clock trimming via LSE is therefore not active.
