@@ -82,6 +82,80 @@ Current limitations :
 - Up to 1000 roms/disks will be visible for each system
 - CJK characters not yet visible
 
+
+## PSRAM-only port (`psram-only` branch)
+
+This branch is a variant of the repo that runs **without the external NOR
+flash**. The NOR chip has been physically removed and replaced with an
+**ISSI IS66WVS4M8FALL 4MB serial PSRAM** sharing the same OCTOSPI bus
+(CLK/SIO0-3), with its CE# on **PE11** (the OSPI hardware NCS pin).
+
+### How it works
+
+- OCTOSPI1 maps the PSRAM at **0x90000000** (the old extflash window).
+  Reads use the ISSI quad-read command (EBh, 1-4-4, 6 dummy cycles);
+  writes use the page-write command (02h, 1024-byte pages). The littlefs
+  filesystem and the runtime config live on the PSRAM, and the emulator
+  cores cache their XIP blobs there (`odroid_overlay_cache_file_in_flash`).
+- ROMs, cores, fonts, mappers and language packs load from the **SD card**
+  exactly as in the upstream SD firmware (see `sd_content/`).
+- The PSRAM Read-ID (9Fh) requires a 24-bit don't-care address phase -
+  the driver probes with its own command set, not the default NOR config.
+
+### Known differences / limitations
+
+- **Volatile storage**: littlefs sits in PSRAM, so settings and save states
+  are lost on power-off. (Saves could be moved to the SD in future work.)
+- **CRS disabled**: the Clock Recovery System config in
+  `SystemClock_Config()` is compiled out (`#if 0`); it faulted on this
+  board. USB/audio clock trimming via LSE is therefore not active.
+- gnwmanager's flash-littlefs commands (`push`, `ls`) fail against the
+  PSRAM; use `gnwmanager sdpush` for the SD card instead (see below).
+
+### Building and flashing
+
+```bash
+make all GNW_TARGET=zelda            # INTFLASH_BANK=2 is the default
+make create_sd_data GNW_TARGET=zelda
+```
+
+Flash with the patched OpenOCD (256KB undocumented banks) - no gnwmanager
+protocol needed:
+
+1. SylverB bootloader to bank 1 (0x08000000)
+2. `build/gw_retro_go_intflash.bin` to bank 2 (0x08100000)
+
+```bash
+# bank 1 (bootloader):
+openocd -f interface/stlink.cfg -f target/stm32h7x.cfg -c \
+  "set DUAL_BANK 0; init; reset halt; mww 0x5C001034 0x40; \
+   flash erase_sector 0 0 last; \
+   flash write_image /path/to/gnw_bootloader.bin 0x08000000; \
+   mww 0x5C001034 0x0; reset run; shutdown"
+# bank 2 (firmware): same, but "set DUAL_BANK 1" and
+#   flash erase_sector 1 0 last + write_image ... 0x08100000
+```
+
+The `mww 0x5C001034 0x40` sets the WWDG stop-in-debug bit
+(DBGMCU_APB3FZ1) so a halted core doesn't watchdog-reset mid-erase.
+
+Push the SD content to the card with:
+
+```bash
+gnwmanager sdpush --file sd_content/cores/nes_fceu.bin --dest-path /cores/
+# ... all of sd_content/cores, fonts, lang, mappers, plus your ROMs
+```
+
+### Companion repos
+
+- **Diagnostics**: [CapnRon/gnw-stm32h7b0-diag-firmware](https://github.com/CapnRon/gnw-stm32h7b0-diag-firmware)
+  branch `ram-test` - RAM/PSRAM/NOR test firmware with automatic
+  chip-select detection (PE11/PC11/PE9). Use it to verify the PSRAM
+  wiring before running this firmware.
+- **Flasher**: [CapnRon/gnwmanager](https://github.com/CapnRon/gnwmanager)
+  branch `psram-only` - gnwmanager bootloader tolerant of a missing NOR
+  (never fails init on unknown IDs, IWDG-safe flash erase).
+
 ## Installation
 
 ### Pre-modded Options
