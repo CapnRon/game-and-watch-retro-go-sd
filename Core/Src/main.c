@@ -558,6 +558,7 @@ void SystemClock_Config(uint8_t oc_level)
   }
   /** Enable the SYSCFG APB clock
   */
+#if 0 /* PSRAM-only debug: CRS config faults on this board. */
   __HAL_RCC_CRS_CLK_ENABLE();
   /** Configures CRS
   */
@@ -569,6 +570,7 @@ void SystemClock_Config(uint8_t oc_level)
   RCC_CRSInitStruct.HSI48CalibrationValue = 32;
 
   HAL_RCCEx_CRSConfig(&RCC_CRSInitStruct);
+#endif
 }
 
 /**
@@ -823,6 +825,10 @@ static void MX_OCTOSPI1_Init(void)
   hospi1.Instance = OCTOSPI1;
   hospi1.Init.FifoThreshold = 4;
   hospi1.Init.DualQuad = HAL_OSPI_DUALQUAD_DISABLE;
+  /* PSRAM-only build: the external NOR flash has been removed and replaced by
+   * an ISSI IS66WVS4M8FALL 4MB PSRAM (CS on PE11, shared SPI/QPI bus).
+   * The diag firmware probes this exact part reliably with the plain
+   * MACRONIX/28 configuration — keep it identical. */
   hospi1.Init.MemoryType = HAL_OSPI_MEMTYPE_MACRONIX;
   hospi1.Init.DeviceSize = 28;
   hospi1.Init.ChipSelectHighTime = 2;

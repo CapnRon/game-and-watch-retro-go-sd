@@ -338,6 +338,22 @@ static void init_spansion(void);
 static void init_mx_issi(void);
 static void init_winbond(void);
 
+/* PSRAM-only driver configuration.
+ * ISSI IS66WVS4M8FALL (4MB, 1024-byte pages):
+ *  - no reset/enable/status opcodes (those are NOR-only)
+ *  - RDID 0x9F is supported (MF=0x9D KGD=0x5D)
+ *  - reads via quad-read 0xEB (1-line cmd, 1-line addr, 4-line data, 6 dummy)
+ *  - writes via page-write 0x02 (1-line everything, 1024-byte page, no WREN)
+ *  - no erase opcodes — "erase" is implemented as a 0xFF fill
+ */
+const flash_cmd_t cmds_psram[CMD_COUNT] = {
+    [CMD_RDID]   = CMD_DEF(0x9F, LINES_1, LINES_1, ADDR_SIZE_24B, LINES_1,    0),
+    [CMD_PP]     = CMD_DEF(0x02, LINES_1, LINES_1, ADDR_SIZE_24B, LINES_1,    0),
+    [CMD_READ]   = CMD_DEF(0xEB, LINES_1, LINES_4, ADDR_SIZE_24B, LINES_4,    6),
+};
+
+const flash_config_t config_psram = FLASH_CONFIG_DEF(cmds_psram, 0x01000, 0, 0, 0, false, NULL);
+
 const flash_config_t config_spi_24b       = FLASH_CONFIG_DEF(cmds_spi_24b,       0x01000,  0x8000, 0x10000, 0,  false, NULL);
 const flash_config_t config_quad_24b_mx   = FLASH_CONFIG_DEF(cmds_quad_24b_mx,   0x01000,  0x8000, 0x10000, 0,   true, init_mx_issi);
 const flash_config_t config_quad_32b_mx   = FLASH_CONFIG_DEF(cmds_quad_32b_mx,   0x01000,  0x8000, 0x10000, 0,   true, init_mx_issi);
@@ -527,7 +543,9 @@ void OSPI_EnableMemoryMappedMode(void)
         Error_Handler();
     }
 
-    // Use read instruction for write (in order to not alter the flash by accident)
+    // Configure the WRITE command (0x02 page write) so that memory-mapped
+    // writes to 0x90000000 go straight through to the PSRAM.
+    set_ospi_cmd(&ospi_cmd, CMD(PP), 0, NULL, 0);
     ospi_cmd.OperationType = HAL_OSPI_OPTYPE_WRITE_CFG;
     if (HAL_OSPI_Command(flash.hospi, &ospi_cmd, HAL_OSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK) {
         Error_Handler();
@@ -561,36 +579,40 @@ void OSPI_DisableMemoryMappedMode(void)
 
 static void _OSPI_Erase(const flash_cmd_t *cmd, uint32_t address)
 {
-    OSPI_WriteBytes(cmd, address, NULL, 0);
+    (void)cmd;
+
+    // PSRAM has no erase opcodes. Fill one 4KB block with 0xFF instead.
+    static const uint8_t ff[256] = {
+        [0 ... 255] = 0xFF,
+    };
+
+    for (uint32_t off = 0; off < 0x1000; off += sizeof(ff)) {
+        OSPI_PageProgram(address + off, ff, sizeof(ff));
+    }
 }
 
 void OSPI_ChipErase(void)
 {
-    DBG("CE\n");
-    _OSPI_Erase(CMD(CE), 0); // Chip Erase
-    wait_for_status(STATUS_WIP_Msk, 0, 0);
+    // PSRAM: "chip erase" = fill the whole 4MB with 0xFF.
+    uint32_t address = 0;
+    uint32_t size = flash.size;
+    while (size > 0) {
+        _OSPI_Erase(NULL, address);
+        address += 0x1000;
+        size -= 0x1000;
+        wdog_refresh();
+    }
 }
 
 bool OSPI_Erase(uint32_t *address, uint32_t *size, bool blocking)
 {
-    // Performs one erase command per call with the largest size possible.
-    // Sets *address and *size to values that should be passed to
-    // OSPI_Erase in the next iteration.
-    // Returns true when done.
+    // PSRAM "erase": fill 4KB blocks with 0xFF (no opcodes, no status polls).
+    // Keeps the same iterative protocol as the NOR implementation.
 
     assert(address != NULL);
     assert(size != NULL);
 
-    if(blocking){
-        // wait until a previous command is no longer in progress
-        wait_for_status(STATUS_WIP_Msk, 0, 0);
-    }
-    else if(get_status(STATUS_WIP_Msk)){
-        // A write is in progress, no action to be performed right now
-        return false;
-    }
-
-    if(*size == 0)
+    if (*size == 0)
         return true;
 
     uint32_t req_address = *address;
@@ -598,44 +620,14 @@ bool OSPI_Erase(uint32_t *address, uint32_t *size, bool blocking)
 
     DBG("E 0x%lx %ld\n", req_address, req_size);
 
-    // Assumes that erase sizes are sorted: 4 > 3 > 2 > 1.
-    // Assumes that erase sizes are powers of two.
+    assert((req_address & 0xFFF) == 0);
 
-    const flash_cmd_t * erase_cmd[] = {
-        CMD(ERASE1),
-        CMD(ERASE2),
-        CMD(ERASE3),
-        CMD(ERASE4),
-    };
+    _OSPI_Erase(NULL, req_address);
+    *size = req_size - 0x1000;
+    *address = req_address + 0x1000;
+    wdog_refresh();
 
-    for (int i = 3; i >= 0; i--) {
-        uint32_t erase_size = flash.config->erase_sizes[i];
-
-        if (erase_size == 0) {
-            continue;
-        }
-
-        if ((req_size >= erase_size) && ((req_address & (erase_size - 1)) == 0)) {
-            *size = req_size - erase_size;
-            *address = req_address + erase_size;
-
-            DBG("Erasing block (%ld): 0x%08lx (%ld left)\n", erase_size, req_address, *size);
-
-            OSPI_NOR_WriteEnable();
-            _OSPI_Erase(erase_cmd[i], req_address);
-            if(blocking){
-                wait_for_status(STATUS_WIP_Msk, 0, 0);
-            }
-
-            return (*size == 0);
-        }
-    }
-
-    DBG("No suitable erase command found for addr=%08lx size=%ld!\n", *address, *size);
-
-    assert(!"Unsupported erase operation!");
-
-    return false;
+    return (blocking ? (*size == 0) : false);
 }
 
 void OSPI_EraseSync(uint32_t address, uint32_t size)
@@ -662,17 +654,11 @@ void OSPI_PageProgram(uint32_t address,
     DBG("PP cmd=%02X addr=0x%lx buf=%p len=%d\n", (*CMD(PP)).cmd, address, buffer, buffer_size);
 
     OSPI_WriteBytes(CMD(PP), address, buffer, buffer_size);
-
-    // Wait for Write In Progress Bit to become zero
-    wait_for_status(STATUS_WIP_Msk, 0, TMO_DEFAULT);
 }
 
 void OSPI_NOR_WriteEnable(void)
 {
-    OSPI_WriteBytes(CMD(WREN), 0, NULL, 0);
-
-    // Wait for Write Enable Latch to be set
-    wait_for_status(STATUS_WEL_Msk, STATUS_WEL_Msk, TMO_DEFAULT);
+    // PSRAM does not have (or need) a Write Enable latch.
 }
 
 void OSPI_Program(uint32_t address,
@@ -685,7 +671,6 @@ void OSPI_Program(uint32_t address,
     assert((address & 0xff) == 0);
 
     for (int i = 0; i < iterations; i++) {
-        OSPI_NOR_WriteEnable();
         OSPI_PageProgram((i + dest_page) * 256,
                          buffer + (i * 256),
                          buffer_size > 256 ? 256 : buffer_size);
@@ -705,12 +690,14 @@ void OSPI_ReadJedecId(uint8_t dest[3])
 
 void OSPI_ReadSR(uint8_t dest[1])
 {
-    OSPI_ReadBytes(CMD(RDSR), 0, dest, 1);
+    // PSRAM has no status register — the debug UI expects a byte, give it 0.
+    dest[0] = 0;
 }
 
 void OSPI_ReadCR(uint8_t dest[1])
 {
-    OSPI_ReadBytes(CMD(RDCR), 0, dest, 1);
+    // PSRAM has no configuration register — see OSPI_ReadSR.
+    dest[0] = 0;
 }
 
 static void OSPI_GetFlashSizeSfdp(uint32_t *flash_size)
@@ -904,46 +891,24 @@ uint32_t OSPI_GetFlashSize(void)
 
 void OSPI_Init(OSPI_HandleTypeDef *hospi)
 {
-    uint8_t status;
-
     flash.hospi = hospi;
 
-    // Enable Reset
-    OSPI_WriteBytes(CMD(RSTEN), 0, NULL, 0);
-    HAL_Delay(2);
-
-    // Reset
-    OSPI_WriteBytes(CMD(RST), 0, NULL, 0);
-    HAL_Delay(20);
+    /* PSRAM-only: no NOR reset opcodes, no status register, no SFDP. */
 
     // Read ID
-    OSPI_ReadBytes(CMD(RDID), 0, &flash.jedec_id.u8[0], 3);
+    // PSRAM-only: probe with the PSRAM command set (the default config's
+    // RDID lacks the 24-bit address phase the PSRAM requires).
+    OSPI_ReadBytes(&cmds_psram[CMD_RDID], 0, &flash.jedec_id.u8[0], 3);
     DBG("JEDEC_ID: %02X %02X %02X\n", flash.jedec_id.u8[0], flash.jedec_id.u8[1], flash.jedec_id.u8[2]);
 
-    // Check for known bad IDs
-    if (((flash.jedec_id.u32 & 0xffffff) == 0xffffff) ||
-        ((flash.jedec_id.u32 & 0xffffff) == 0x000000)) {
-        assert(!"Can't communicate with the external flash! Please check the soldering.");
+    // ISSI PSRAM: MF=0x9D, KGD=0x5D
+    if ((flash.jedec_id.u32 & 0xFFFF) != 0x5D9D) {
+        assert(!"Can't communicate with the PSRAM! Please check the soldering.");
     }
 
-    OSPI_ReadBytes(CMD(RDSR), 0, &status, 1);
-    DBG("Status: %02X\n", status);
-
-    for (int i = 0; i < ARRAY_SIZE(jedec_map); i++) {
-        if ((flash.jedec_id.u32 & 0xffffff) == (jedec_map[i].jedec_id.u32 & 0xffffff)) {
-            flash.config = jedec_map[i].config;
-            flash.name = jedec_map[i].name;
-            DBG("Found config: %s\n", flash.name);
-            break;
-        }
-    }
-
-    // Get flash size using SFDP
-    OSPI_GetFlashSizeSfdp(&flash.size);
-
-    if (flash.config->init_fn) {
-        flash.config->init_fn();
-    }
+    flash.config = &config_psram;
+    flash.name = "IS66WVS4M8FALL";
+    flash.size = 4 * 1024 * 1024;
 
     OSPI_EnableMemoryMappedMode();
 }
