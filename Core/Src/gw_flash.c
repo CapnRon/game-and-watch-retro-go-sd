@@ -583,27 +583,16 @@ static void _OSPI_Erase(const flash_cmd_t *cmd, uint32_t address)
     (void)cmd;
 
     // PSRAM has no erase opcodes; the erase contract is just "reads return
-    // 0xFF". Fill the 4KB block directly through the memory-mapped window
-    // (mapped writes are configured as the 02h page write). The callers
-    // bracket erase with OSPI_DisableMemoryMappedMode(), so re-enable the
-    // mapping for the fill and restore the previous state afterwards.
-    bool was_mapped = flash.mem_mapped_enabled;
-    if (!was_mapped) {
-        OSPI_EnableMemoryMappedMode();
-    }
+    // 0xFF". Fill the 4KB block with 256-byte indirect page writes (the
+    // 02h write command). NOTE: a memset through the memory-mapped window
+    // was tried as a fast path but faults (IMPRECISERR) on this board, so
+    // the indirect path is the only reliable one.
+    static const uint8_t ff[256] = {
+        [0 ... 255] = 0xFF,
+    };
 
-    uint8_t *dst = (uint8_t *)((uint32_t)&__EXTFLASH_BASE__ + address);
-    memset(dst, 0xFF, 0x1000);
-
-    // If the D-Cache is on, the fill sits in dirty lines; push them out and
-    // invalidate so subsequent reads see the 0xFF pattern.
-    if (SCB->CCR & SCB_CCR_DC_Msk) {
-        SCB_CleanDCache_by_Addr((uint32_t *)dst, 0x1000);
-        SCB_InvalidateDCache_by_Addr((uint32_t *)dst, 0x1000);
-    }
-
-    if (!was_mapped) {
-        OSPI_DisableMemoryMappedMode();
+    for (uint32_t off = 0; off < 0x1000; off += sizeof(ff)) {
+        OSPI_PageProgram(address + off, ff, sizeof(ff));
     }
 }
 
