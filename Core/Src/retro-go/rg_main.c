@@ -1042,14 +1042,13 @@ void GLOBAL_DATA app_main(uint8_t boot_mode)
     if (fs_mounted == false) {
         sdcard_error_screen();
     }
-    // PSRAM-only board: the flash-cache table on SD survives power cycles but
-    // the cached data (volatile PSRAM) does not — drop the table on cold boot
-    // so nothing serves a stale cache hit. (Hot boot keeps PSRAM live.)
-    if (boot_mode != BOOT_MODE_HOT) {
-        if (rg_storage_exists("/selftest.flag"))
-            flash_alloc_dump_metadata_state(); // triage: capture previous session's table
-        flash_alloc_discard_stale_cache();
-    }
+    // PSRAM-only board: never trust a cache hit across an app switch — hot
+    // boots have been observed to serve invalid PSRAM data at a "hit"
+    // address (zelda3_assets.dat "Invalid assets file" on relaunch) despite
+    // no power cycle. Always discard and re-cache fresh, hot or cold.
+    if (rg_storage_exists("/selftest.flag"))
+        flash_alloc_dump_metadata_state(); // triage: capture previous session's table
+    flash_alloc_discard_stale_cache();
 
     // PSRAM data-path self-test (SD->DTCM->PSRAM->execute), one run per cold
     // boot while /selftest.flag is on the card. Results: log buffer.
