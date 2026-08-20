@@ -838,7 +838,14 @@ static void MX_OCTOSPI1_Init(void)
   hospi1.Init.ClockPrescaler = 1;
   hospi1.Init.SampleShifting = HAL_OSPI_SAMPLE_SHIFTING_NONE;
   hospi1.Init.DelayHoldQuarterCycle = HAL_OSPI_DHQC_DISABLE;
-  hospi1.Init.ChipSelectBoundary = 0;
+  /* PSRAM (IS66WVS4M8FALL) wraps every read/write burst within its 1024-byte
+   * page (datasheet 4.2). XSPI memory-mapped reads prefetch with NCS held
+   * low, so a stream crossing a page boundary comes back wrapped (page 0
+   * repeated). Releasing NCS at every 1024-byte boundary (2^10) keeps each
+   * MM transaction inside one chip page, so the wrap can never trigger.
+   * RM0455 24.4.7 "NCS boundary" (DCR3.CSBOUND). PSRAM needs no WREN
+   * re-issue, so the write-mode caveat does not apply. */
+  hospi1.Init.ChipSelectBoundary = 10;
   hospi1.Init.DelayBlockBypass = HAL_OSPI_DELAY_BLOCK_BYPASSED;
   hospi1.Init.MaxTran = 0;
   hospi1.Init.Refresh = 0;
