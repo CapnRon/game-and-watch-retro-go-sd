@@ -1040,6 +1040,11 @@ void GLOBAL_DATA app_main(uint8_t boot_mode)
     if (fs_mounted == false) {
         sdcard_error_screen();
     }
+    // PSRAM-only board: the flash-cache table on SD survives power cycles but
+    // the cached data (volatile PSRAM) does not — drop the table on cold boot
+    // so nothing serves a stale cache hit. (Hot boot keeps PSRAM live.)
+    if (boot_mode != BOOT_MODE_HOT)
+        flash_alloc_discard_stale_cache();
 #else
     // Initialize the littleFS filesystem
     fs_init();

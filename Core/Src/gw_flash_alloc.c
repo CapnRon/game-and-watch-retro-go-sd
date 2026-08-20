@@ -452,6 +452,18 @@ void flash_alloc_reset()
     remove(METADATA_FILE);
 }
 
+// PSRAM-only board: the cached file DATA lives in volatile PSRAM, but the
+// cache table (METADATA_FILE) persists on the SD card. After a power cycle
+// every table entry points at random PSRAM contents, and is_file_in_flash()
+// happily serves a stale "hit" (observed: zelda3_assets.dat cache hit on
+// blank PSRAM -> signature check fails -> "Invalid assets file" on launch).
+// Call on every cold boot to force a fresh re-cache.
+void flash_alloc_discard_stale_cache(void)
+{
+    int r = remove(METADATA_FILE);
+    printf("flash_alloc: discard_stale_cache remove()=%d\n", r);
+}
+
 uint8_t *store_file_in_flash(const char *file_path, uint32_t *file_size_p, bool byte_swap, file_progress_cb_t progress_cb)
 {
     return store_file_in_flash_relocate(file_path, file_size_p, byte_swap, progress_cb, NULL);
@@ -465,9 +477,35 @@ uint8_t *store_file_in_flash_relocate(const char *file_path, uint32_t *file_size
     // TODO : append file modification time to filepath for crc32
     // to handle case where rom file in sd card has been modified
     uint32_t file_crc32 = compute_file_crc32(file_path);
-    uint32_t flash_address;
+    uint32_t flash_address = 0;
+    uint32_t base = get_extflash_base();
+    /* Fitted chip is the IS66WVS4M8FALL (4 MB). The XSPI window maps 32 MB,
+     * but anything past 4 MB aliases the chip's low region — a table entry
+     * there is wrong. */
+    uint32_t extflash_size = 4u * 1024 * 1024;
 
-    if (is_file_in_flash(file_crc32, &flash_address, file_size_p))
+    bool hit = is_file_in_flash(file_crc32, &flash_address, file_size_p);
+    /* Triage (zelda3): a table entry outside the PSRAM window is stale by
+     * definition (observed: entry at 0x24016300 in AXI SRAM served as a
+     * "hit" -> PatchCodeRodataOffset computed a wild offset -> core data
+     * pointers clobbered -> HardFault). Drop it and re-cache. */
+    if (hit && (flash_address < base || flash_address >= base + extflash_size)) {
+        printf("flash_alloc: STALE hit %s addr=0x%08lx outside [0x%08lx,0x%08lx) - dropping entry\n",
+               file_path, (unsigned long)flash_address, (unsigned long)base,
+               (unsigned long)(base + extflash_size));
+        for (int i = 0; i < MAX_FILES; i++) {
+            if (metadata->files[i].valid && metadata->files[i].file_crc32 == file_crc32) {
+                metadata->files[i].valid = false;
+                break;
+            }
+        }
+        hit = false;
+    }
+    printf("flash_alloc: %s %s crc=0x%08lx addr=0x%08lx size=0x%08lx base=0x%08lx\n",
+           hit ? "HIT" : "miss", file_path, (unsigned long)file_crc32,
+           (unsigned long)flash_address, (unsigned long)*file_size_p, (unsigned long)base);
+
+    if (hit)
     {
         /* A hit is as live as a write: the caller walks away holding this address. */
         live_add(flash_address, *file_size_p);

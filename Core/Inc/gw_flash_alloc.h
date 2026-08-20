@@ -29,6 +29,7 @@ typedef void (*flash_relocate_cb_t)(uint8_t *buffer, uint32_t length, uint32_t o
                                     uint8_t *file_address, uint32_t file_size);
 
 void flash_alloc_reset();
+void flash_alloc_discard_stale_cache(void);
 
 /* Forget which files are being read. The device does this by rebooting between
  * games; a host test has to ask. */
