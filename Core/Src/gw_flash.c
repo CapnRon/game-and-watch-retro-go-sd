@@ -351,6 +351,7 @@ const flash_cmd_t cmds_psram[CMD_COUNT] = {
     [CMD_RDID]   = CMD_DEF(0x9F, LINES_1, LINES_1, ADDR_SIZE_24B, LINES_1,    0),
     [CMD_PP]     = CMD_DEF(0x02, LINES_1, LINES_1, ADDR_SIZE_24B, LINES_1,    0),
     [CMD_READ]   = CMD_DEF(0xEB, LINES_1, LINES_4, ADDR_SIZE_24B, LINES_4,    6),
+    [CMD_RDSR]   = CMD_DEF(0x05, LINES_1, LINES_0, ADDR_SIZE_24B, LINES_1,    0),
 };
 
 const flash_config_t config_psram = FLASH_CONFIG_DEF(cmds_psram, 0x01000, 0, 0, 0, false, NULL);
@@ -473,6 +474,18 @@ static void OSPI_ReadBytes(const flash_cmd_t *cmd,
     }
 }
 
+void OSPI_IndirectRead(uint32_t address, uint8_t *data, size_t len)
+{
+    OSPI_ReadBytes(CMD(READ), address, data, len);
+}
+
+/* PSRAM status register (0x05) — carries the wrapped-burst-length bit
+ * (32 vs 1024, default 1024). PSRAM has no WIP/WEL bits to poll. */
+void OSPI_PsramReadStatus(uint8_t *out)
+{
+    OSPI_ReadBytes(CMD(RDSR), 0, out, 1);
+}
+
 static void OSPI_WriteBytes(const flash_cmd_t *cmd,
                             uint32_t address,
                             const uint8_t *data,
@@ -501,6 +514,11 @@ static void OSPI_WriteBytes(const flash_cmd_t *cmd,
             Error_Handler();
         }
     }
+}
+
+void OSPI_IndirectWrite(uint32_t address, const uint8_t *data, size_t len)
+{
+    OSPI_WriteBytes(CMD(PP), address, (uint8_t *)data, len);
 }
 
 static uint8_t get_status(uint8_t mask){
