@@ -349,7 +349,10 @@ static void init_winbond(void);
  */
 const flash_cmd_t cmds_psram[CMD_COUNT] = {
     [CMD_RDID]   = CMD_DEF(0x9F, LINES_1, LINES_1, ADDR_SIZE_24B, LINES_1,    0),
-    [CMD_PP]     = CMD_DEF(0x02, LINES_1, LINES_1, ADDR_SIZE_24B, LINES_1,    0),
+    /* 0x38 = SPI Quad IO Write (1-4-4, 0 wait cycles, datasheet §5.2) —
+     * quad-speeds address+data over the plain 1-1-1 0x02 page program,
+     * no persistent QPI-mode switch needed. */
+    [CMD_PP]     = CMD_DEF(0x38, LINES_1, LINES_4, ADDR_SIZE_24B, LINES_4,    0),
     [CMD_READ]   = CMD_DEF(0xEB, LINES_1, LINES_4, ADDR_SIZE_24B, LINES_4,    6),
     [CMD_RDSR]   = CMD_DEF(0x05, LINES_1, LINES_0, ADDR_SIZE_24B, LINES_1,    0),
 };
