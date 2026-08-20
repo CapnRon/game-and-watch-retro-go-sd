@@ -836,7 +836,15 @@ static void MX_OCTOSPI1_Init(void)
   hospi1.Init.ClockMode = HAL_OSPI_CLOCK_MODE_0;
   hospi1.Init.WrapSize = HAL_OSPI_WRAP_NOT_SUPPORTED;
   hospi1.Init.ClockPrescaler = 1;
-  hospi1.Init.SampleShifting = HAL_OSPI_SAMPLE_SHIFTING_NONE;
+  /* Half-cycle sample shift. At oc_level=1's 104MHz OSPI clock, reads had
+   * no sampling margin left — a fresh write of zelda3_assets.dat into
+   * PSRAM would come back corrupted (Die("Invalid assets file") signature
+   * check) despite the write itself succeeding. Confirmed the data path
+   * was fine (reverting the 0x38 quad-IO CMD_PP write to plain 1-1-1 0x02
+   * didn't help), so this was a read-sampling-point issue, not a data
+   * corruption issue — this shift fixes it. No effect at the stock 64MHz
+   * clock either way. */
+  hospi1.Init.SampleShifting = HAL_OSPI_SAMPLE_SHIFTING_HALFCYCLE;
   hospi1.Init.DelayHoldQuarterCycle = HAL_OSPI_DHQC_DISABLE;
   /* PSRAM (IS66WVS4M8FALL) wraps every read/write burst within its 1024-byte
    * page (datasheet 4.2). XSPI memory-mapped reads prefetch with NCS held
