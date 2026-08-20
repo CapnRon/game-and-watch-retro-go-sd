@@ -234,8 +234,24 @@ void lcd_clone(void)
 
 void* lcd_get_active_buffer(void)
 {
-  return active_framebuffer ? framebuffer2 : framebuffer1;
+  void *p = active_framebuffer ? framebuffer2 : framebuffer1;
+  /* Triage (zelda3 "Caching game" HardFault, selftest v5): if a buffer
+   * pointer got clobbered, every fill loop scribbles pixels at the bad
+   * address — observed corrupting stack frames and core RAM. Log a few
+   * times, then fall back to a known-good buffer instead of writing wild. */
+  if (p != framebuffer1 && p != framebuffer2) {
+    static uint32_t bad_count = 0;
+    if (bad_count < 8)
+      printf("LCD: BAD fb ptr act=%u p=%08lx f1=%08lx f2=%08lx\n",
+             (unsigned)active_framebuffer, (unsigned long)(uintptr_t)p,
+             (unsigned long)(uintptr_t)framebuffer1,
+             (unsigned long)(uintptr_t)framebuffer2);
+    bad_count++;
+    p = framebuffer1;
+  }
+  return p;
 }
+
 
 void* lcd_get_inactive_buffer(void)
 {

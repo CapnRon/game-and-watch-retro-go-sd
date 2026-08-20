@@ -464,6 +464,34 @@ void flash_alloc_discard_stale_cache(void)
     printf("flash_alloc: discard_stale_cache remove()=%d\n", r);
 }
 
+// Triage (zelda3): report the on-disk cache table (selftest v5)
+void flash_alloc_dump_metadata_state(void)
+{
+    FILE *f = fopen(METADATA_FILE, "rb");
+    if (!f) {
+        printf("ST-META: file absent\n");
+        return;
+    }
+    Metadata m;
+    long rd = fread(&m, 1, sizeof(m), f);
+    fclose(f);
+    if (rd != (long)sizeof(m)) {
+        printf("ST-META: file size=%ld (not a table)\n", rd);
+        return;
+    }
+    printf("ST-META: base=0x%08lx ptr=0x%08lx ver=%lu uid=%08lx%08lx%08lx\n",
+           (unsigned long)m.flash_write_base, (unsigned long)m.flash_write_pointer,
+           (unsigned long)m.version, (unsigned long)m.cpu_unique_id.uid[0],
+           (unsigned long)m.cpu_unique_id.uid[1], (unsigned long)m.cpu_unique_id.uid[2]);
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (m.files[i].valid)
+            printf("ST-META: [%d] crc=0x%08lx addr=0x%08lx size=0x%08lx\n", i,
+                   (unsigned long)m.files[i].file_crc32,
+                   (unsigned long)m.files[i].flash_address,
+                   (unsigned long)m.files[i].file_size);
+    }
+}
+
 uint8_t *store_file_in_flash(const char *file_path, uint32_t *file_size_p, bool byte_swap, file_progress_cb_t progress_cb)
 {
     return store_file_in_flash_relocate(file_path, file_size_p, byte_swap, progress_cb, NULL);

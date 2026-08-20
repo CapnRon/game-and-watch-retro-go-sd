@@ -435,6 +435,7 @@ Core/Src/retro-go/rg_emulators.c \
 Core/Src/retro-go/rg_favorites.c \
 Core/Src/retro-go/gw_firmware_abi.c \
 Core/Src/retro-go/rg_storage.c \
+Core/Src/retro-go/rg_selftest.c \
 Core/Src/retro-go/rg_welcome_prompt.c \
 Core/Src/retro-go/rg_utils.c \
 Core/Src/porting/odroid_settings.c \

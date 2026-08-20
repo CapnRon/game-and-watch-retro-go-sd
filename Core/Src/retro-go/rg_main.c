@@ -18,6 +18,8 @@
 #include "gw_sdcard.h"
 #include "rg_rtc.h"
 #include "rg_i18n.h"
+#include "rg_storage.h"
+#include "rg_selftest.h"
 #include "odroid_overlay.h"
 #include "odroid_settings.h"
 #include "rg_welcome_prompt.h"
@@ -1043,8 +1045,16 @@ void GLOBAL_DATA app_main(uint8_t boot_mode)
     // PSRAM-only board: the flash-cache table on SD survives power cycles but
     // the cached data (volatile PSRAM) does not — drop the table on cold boot
     // so nothing serves a stale cache hit. (Hot boot keeps PSRAM live.)
-    if (boot_mode != BOOT_MODE_HOT)
+    if (boot_mode != BOOT_MODE_HOT) {
+        if (rg_storage_exists("/selftest.flag"))
+            flash_alloc_dump_metadata_state(); // triage: capture previous session's table
         flash_alloc_discard_stale_cache();
+    }
+
+    // PSRAM data-path self-test (SD->DTCM->PSRAM->execute), one run per cold
+    // boot while /selftest.flag is on the card. Results: log buffer.
+    if (boot_mode != BOOT_MODE_HOT && rg_storage_exists("/selftest.flag"))
+        psram_selftest_run();
 #else
     // Initialize the littleFS filesystem
     fs_init();
