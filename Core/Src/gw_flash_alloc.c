@@ -299,7 +299,26 @@ static bool circular_flash_write(const char *file_path,
                                  file_progress_cb_t progress_cb,
                                  flash_relocate_cb_t relocate_cb)
 {
-    uint8_t buffer[16 * 1024];
+    /* I/O buffer with stack-overflow canaries on BOTH sides (struct member
+     * order is guaranteed, so the canaries are truly adjacent). If anything
+     * writes past the buffer (SD read, PSRAM program, an ISR), the caller's
+     * stack frames get scribbled — the zelda3 "Caching game" HardFault
+     * triage (selftest v5). */
+    /* 4 KB, NOT 16 KB: the user stack is only 24 KB (_Min_Stack_Size in the
+     * linker script) and this function sits under a deep call chain
+     * (odroid_overlay -> store_file_in_flash -> here -> progress_cb ->
+     * draw_progress_bar -> i18n fonts). A 16 KB frame here overran the
+     * stack bottom during "Caching game" — scribbling caller frames (the
+     * zelda3 HardFault with a garbage return address) until the write hit
+     * the NO_ACCESS redzone (MemFault in memcpy from fread). 4 KB matches
+     * the PSRAM erase size and keeps the whole chain inside the stack. */
+    struct {
+        uint32_t can_lo;
+        uint8_t  data[4 * 1024];
+        uint32_t can_hi;
+    } io;
+    io.can_lo = 0xC0FFEE01u;
+    io.can_hi = 0xC0FFEE02u;
     uint32_t total_bytes_processed = 0;
     uint8_t progress = 0;
 
@@ -347,14 +366,14 @@ static bool circular_flash_write(const char *file_path,
      * 4KB-sector erase per 4KB of file, i.e. 2048 erase commands for an 8MB
      * ROM, which was the bulk of the "Caching game" wait. Interleaving the
      * erase with the SD reads keeps the progress bar moving.
-     * (This also fixes a latent overflow: the old loop fread() block_size
-     * bytes into the 16KB buffer, which overflows on chips whose smallest
-     * erase exceeds 16KB, e.g. the 256KB-sector Spansion config.) */
+     * (The old loop fread() block_size bytes — on chips whose smallest
+     * erase is larger than the buffer, that overflowed; we fread sizeof()
+     * of the buffer instead, so any erase size is safe.) */
     uint32_t erase_addr = address_in_flash;
     uint32_t erase_left = erase_size_total;
 
     while (total_bytes_processed < *data_size) {
-        size_t want = sizeof(buffer);
+        size_t want = sizeof(io.data);
         if (want > *data_size - total_bytes_processed)
             want = *data_size - total_bytes_processed;
 
@@ -363,16 +382,16 @@ static bool circular_flash_write(const char *file_path,
             wdog_refresh();
         }
 
-        size_t bytes_read = fread(buffer, 1, want, file);
+        size_t bytes_read = fread(io.data, 1, want, file);
         if (bytes_read == 0)
             break;
 
         if (byte_swap) {
             size_t swap_limit = bytes_read & ~(size_t)1; // last odd byte (if any) is left as-is
             for (size_t i = 0; i < swap_limit; i += 2) {
-                uint8_t temp = buffer[i];
-                buffer[i] = buffer[i + 1];
-                buffer[i + 1] = temp;
+                uint8_t temp = io.data[i];
+                io.data[i] = io.data[i + 1];
+                io.data[i + 1] = temp;
             }
         }
 
@@ -380,11 +399,11 @@ static bool circular_flash_write(const char *file_path,
          * multiple of 4 except at end-of-file, and the file starts on an erase
          * block, so a 32-bit field never straddles two chunks. */
         if (relocate_cb) {
-            relocate_cb(buffer, bytes_read, total_bytes_processed,
+            relocate_cb(io.data, bytes_read, total_bytes_processed,
                         (uint8_t *)*flash_address_out, *data_size);
         }
 
-        OSPI_Program(address_in_flash, buffer, bytes_read);
+        OSPI_Program(address_in_flash, io.data, bytes_read);
 
         address_in_flash += bytes_read;
         flash_write_pointer += bytes_read;
@@ -398,6 +417,12 @@ static bool circular_flash_write(const char *file_path,
         if (bytes_read < want) {
             break;
         }
+    }
+
+    if (io.can_lo != 0xC0FFEE01u || io.can_hi != 0xC0FFEE02u) {
+        printf("flash_alloc: BUFFER CANARY CORRUPT lo=0x%08lx hi=0x%08lx file=%s off=0x%lx\n",
+               (unsigned long)io.can_lo, (unsigned long)io.can_hi,
+               file_path, (unsigned long)total_bytes_processed);
     }
 
     OSPI_EnableMemoryMappedMode();
