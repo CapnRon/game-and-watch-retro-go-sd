@@ -175,6 +175,39 @@ branch `ram-test`), which has its own memory-mapped PSRAM benchmark.
 Both repos need this same fix, since they share the same OCTOSPI
 peripheral errata.
 
+### Measured throughput (companion diagnostic firmware)
+
+This repo does not build its own on-device benchmark. The figures below
+come from the companion diagnostic firmware above, run on the same board
+family, and are the real numbers behind the "SD read dominates" claim in
+this section:
+
+| Device | Clock level | Write | Read | Latency |
+|---|---|---|---|---|
+| DTCM Heap | Stock (280/64) | 266.4 MB/s | 266.2 MB/s | 29ns |
+| DTCM Heap | Aggressive (354/101) | 336.4 MB/s | 336.2 MB/s | 23ns |
+| AXI RAM_CORE | Stock | 266.5 MB/s | 229.8 MB/s | 39ns |
+| AXI RAM_CORE | Aggressive | 336.4 MB/s | 295.6 MB/s | 31ns |
+| AXI RAM_EMU | Stock | 266.7 MB/s | 230.4 MB/s | 39ns |
+| AXI RAM_EMU | Aggressive | 336.9 MB/s | 291.2 MB/s | 31ns |
+| AHB SRAM1/2 | Stock | 194.2 MB/s | 92.8 MB/s | 50ns |
+| AHB SRAM1/2 | Aggressive | 245.3 MB/s | ~117 MB/s | 40ns |
+| NOR flash | Stock | 0.14 MB/s | 7.55 MB/s | 3.39us |
+| NOR flash | Aggressive | 0.14 MB/s | 10.82 MB/s | 2.44us |
+
+Full results across all four clock levels, and the PSRAM indirect/
+memory-mapped numbers when that chip is installed instead of NOR, are in
+the companion repo's own README. NOR's write number is a real
+erase+program+verify cycle, not a placeholder -- it stays flat across
+clock levels because sector-erase time is a fixed internal chip
+operation, not bound to SPI clock speed, unlike NOR's read throughput
+which does scale with it (7.55 -> 10.82 MB/s). This is the same
+"erase/program dominates, and does not get faster with a higher bus
+clock" behavior that motivates the memory-mapped PSRAM write work in
+this repo in the first place -- PSRAM has no erase step at all, which is
+exactly why its write path can be made fast, while NOR's fundamentally
+cannot.
+
 ## Table of Contents
 - [Nintendo® Game \& Watch™ Retro-Go SD](#nintendo-game--watch-retro-go-sd)
   - [Table of Contents](#table-of-contents)
