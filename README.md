@@ -207,36 +207,38 @@ branch's own PSRAM-write wall-clock time.
 | PSRAM | Intermediate (104MHz), SS:HALFCYCLE | 🟢 49.1 MB/s | 🟢 48.9 MB/s | 167ns |
 | PSRAM | Maximum (97MHz), SS:HALFCYCLE | 🟢 45.9 MB/s | 🟢 45.7 MB/s | 182ns |
 | PSRAM | Aggressive (101MHz), SS:HALFCYCLE | 🟢 47.7 MB/s | 🟢 47.5 MB/s | 175ns |
-| NOR flash | Stock | 🟠 0.14 MB/s | 🟠¹ 7.55 MB/s | 3.39us |
-| NOR flash | Aggressive | 🟠 0.14 MB/s | 🟠¹ 10.82 MB/s | 2.44us |
+| NOR flash | Stock, IO:SPI | 🟠 0.14 MB/s | 🟠 7.55 MB/s | 3.65us |
+| NOR flash | Stock, IO:QUAD | 🟠 0.14 MB/s | 🟠 8.53 MB/s | 5.07us |
+| NOR flash | Aggressive, IO:SPI | 🟠 0.14 MB/s | 🟠 10.81 MB/s | 2.70us |
+| NOR flash | Aggressive, IO:QUAD | 🟠 0.14 MB/s | 🟠 10.78 MB/s | 3.81us |
 
 🟢 = fast, 🟠 = slow, both relative to the other chip on the same row.
-The write and read columns are slow for two different reasons, not one:
+The write and read columns are slow for two different, independently
+confirmed reasons:
 
-- **Write** (no superscript): NOR is erase-bound -- erase is a fixed
-  internal chip operation, not bound to SPI clock speed, so NOR's write
-  stays flat (~0.14 MB/s) at every clock level while PSRAM's write (no
-  erase step at all) reaches 30-49 MB/s.
-- **Read** (¹): NOR's read here uses single-line (1-1-1) SPI, while
-  PSRAM's uses quad (1-4-4) -- 4 data lines instead of 1, which accounts
-  for most of the ~4-5x gap (NOR: 7.55-10.82 MB/s vs PSRAM: 30.1-48.9
-  MB/s). **This is a diagnostic-tool artifact, not a real NOR
-  limitation**: the diag firmware's NOR test deliberately uses the
-  universal single-line opcode so it works without first knowing which
-  chip is installed, but this board's actual game firmware
-  (`gw_flash.c`'s `cmds_quad_32b_mx` table, confirmed against this same
-  MX25U51245G) reads NOR in quad mode too (`0xEC`, 4 data lines,
-  6 dummy cycles) -- the same width as PSRAM. Real in-game NOR read
-  throughput is not measured here and is likely much closer to PSRAM's
-  than this table shows. The write-side gap has no such caveat: it is
-  erase-bound regardless of data-line width, since erase has no data
-  phase at all to speed up.
-
-NOR's write number is a real erase+program+verify cycle, not a
-placeholder. The write-side gap is the one that motivates the
-memory-mapped PSRAM write work in this repo -- it is categorically
-worse for NOR (flat, clock-independent) than the read-side gap (scales
-with clock, bus-width-limited).
+- **Write**: NOR is erase-bound -- erase is a fixed internal chip
+  operation, not bound to SPI clock speed, so NOR's write stays flat
+  (~0.14 MB/s) at every clock level while PSRAM's write (no erase step
+  at all) reaches 30-49 MB/s.
+- **Read**: an earlier version of this README claimed the read gap was
+  mostly a diagnostic-tool artifact -- that this board's real game
+  firmware reads NOR in quad mode (`gw_flash.c`'s `cmds_quad_32b_mx`
+  table, `0xEC`, 4 data lines) while the diag firmware's NOR test only
+  used single-line (1-1-1) reads, and that switching to quad would close
+  most of the gap. **That claim was wrong, and has since been directly
+  measured and retracted.** The diag firmware ([CapnRon/gnw-stm32h7b0-diag-firmware](https://github.com/CapnRon/gnw-stm32h7b0-diag-firmware),
+  `ram-test` branch) now benchmarks NOR in both modes (IO:SPI, IO:QUAD),
+  the same comparison PSRAM already gets. Quad NOR read is barely
+  different from single-line -- 8.53 vs 7.55 MB/s at Stock, and actually
+  marginally *slower* at higher clock levels, once the extra 6 dummy
+  cycles quad mode requires stop being hidden by the larger data
+  transfer. Neither mode gets anywhere close to PSRAM's 30-49 MB/s. Line
+  width is not the explanation for this gap; the real cause has not been
+  isolated (a leading candidate is fixed per-command/dummy-cycle
+  overhead relative to this benchmark's 4096-byte read chunk size, but
+  that is a hypothesis, not a confirmed finding -- do not repeat it as
+  fact without measuring it directly, the way the line-width claim
+  should have been checked before being written down the first time).
 
 ## Table of Contents
 - [Nintendo® Game \& Watch™ Retro-Go SD](#nintendo-game--watch-retro-go-sd)
