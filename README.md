@@ -207,38 +207,50 @@ branch's own PSRAM-write wall-clock time.
 | PSRAM | Intermediate (104MHz), SS:HALFCYCLE | 🟢 49.1 MB/s | 🟢 48.9 MB/s | 167ns |
 | PSRAM | Maximum (97MHz), SS:HALFCYCLE | 🟢 45.9 MB/s | 🟢 45.7 MB/s | 182ns |
 | PSRAM | Aggressive (101MHz), SS:HALFCYCLE | 🟢 47.7 MB/s | 🟢 47.5 MB/s | 175ns |
-| NOR flash | Stock, IO:SPI | 🟠 0.14 MB/s | 🟠 7.55 MB/s | 3.65us |
-| NOR flash | Stock, IO:QUAD | 🟠 0.14 MB/s | 🟠 8.53 MB/s | 5.07us |
-| NOR flash | Aggressive, IO:SPI | 🟠 0.14 MB/s | 🟠 10.81 MB/s | 2.70us |
-| NOR flash | Aggressive, IO:QUAD | 🟠 0.14 MB/s | 🟠 10.78 MB/s | 3.81us |
+| NOR flash | Stock, IO:SPI (indirect) | 🟠 0.14 MB/s | 🟠 7.55 MB/s | 3.50us |
+| NOR flash | Stock, IO:QUAD (indirect) | 🟠 0.14 MB/s | 🟠 8.81 MB/s | 5.07us |
+| NOR flash | Aggressive, IO:SPI (indirect) | 🟠 0.14 MB/s | 🟠 10.74 MB/s | 2.66us |
+| NOR flash | Aggressive, IO:QUAD (indirect) | 🟠 0.14 MB/s | 🟠 10.70 MB/s | 3.99us |
+| NOR flash | Stock, **memory-mapped** | -- | 🟢 30.08 MB/s | 0.04us |
+| NOR flash | Intermediate, **memory-mapped** | -- | 🟢 48.89 MB/s | 0.03us |
+| NOR flash | Maximum, **memory-mapped** | -- | 🟢 45.66 MB/s | 0.03us |
 
-🟢 = fast, 🟠 = slow, both relative to the other chip on the same row.
-The write and read columns are slow for two different, independently
-confirmed reasons:
+🟢 = fast, 🟠 = slow, both relative to the other chip/mode. The write
+and read columns are slow for two different, independently confirmed
+reasons:
 
 - **Write**: NOR is erase-bound -- erase is a fixed internal chip
   operation, not bound to SPI clock speed, so NOR's write stays flat
   (~0.14 MB/s) at every clock level while PSRAM's write (no erase step
-  at all) reaches 30-49 MB/s.
-- **Read**: an earlier version of this README claimed the read gap was
-  mostly a diagnostic-tool artifact -- that this board's real game
-  firmware reads NOR in quad mode (`gw_flash.c`'s `cmds_quad_32b_mx`
-  table, `0xEC`, 4 data lines) while the diag firmware's NOR test only
-  used single-line (1-1-1) reads, and that switching to quad would close
-  most of the gap. **That claim was wrong, and has since been directly
-  measured and retracted.** The diag firmware ([CapnRon/gnw-stm32h7b0-diag-firmware](https://github.com/CapnRon/gnw-stm32h7b0-diag-firmware),
-  `ram-test` branch) now benchmarks NOR in both modes (IO:SPI, IO:QUAD),
-  the same comparison PSRAM already gets. Quad NOR read is barely
-  different from single-line -- 8.53 vs 7.55 MB/s at Stock, and actually
-  marginally *slower* at higher clock levels, once the extra 6 dummy
-  cycles quad mode requires stop being hidden by the larger data
-  transfer. Neither mode gets anywhere close to PSRAM's 30-49 MB/s. Line
-  width is not the explanation for this gap; the real cause has not been
-  isolated (a leading candidate is fixed per-command/dummy-cycle
-  overhead relative to this benchmark's 4096-byte read chunk size, but
-  that is a hypothesis, not a confirmed finding -- do not repeat it as
-  fact without measuring it directly, the way the line-width claim
-  should have been checked before being written down the first time).
+  at all) reaches 30-49 MB/s. Memory-mapped NOR read has no write
+  number here because this repo's diag firmware never implemented a
+  memory-mapped NOR *write* path (unlike PSRAM's, which this repo's
+  whole branch is about) -- there is nothing to time.
+- **Read, indirect mode**: earlier versions of this README went through
+  two wrong explanations for this gap before finding the real one, in
+  order:
+  1. First claim: the diag firmware's NOR read used single-line SPI
+     while PSRAM used quad, and switching NOR to quad would close most
+     of the gap. **Wrong, and retracted** -- measured quad NOR read
+     (8.81 MB/s at Stock) is barely different from single-line
+     (7.55 MB/s), and actually *slower* at higher clock levels. Line
+     width does not explain the gap.
+  2. Second claim, after ruling out line width: the real cause is
+     unidentified, possibly fixed per-command overhead in the
+     diagnostic tool's indirect-mode benchmark. **Confirmed correct,
+     and now measured directly**, not left as a hypothesis: this
+     board's real game firmware never reads NOR with chunked indirect
+     commands at all. `gw_flash.c`'s `OSPI_Init()` ends every boot by
+     enabling memory-mapped mode and leaves it as the resting state --
+     real ROM/asset reads are plain CPU loads through `0x90000000`,
+     autonomous hardware bursts with no per-transaction software call.
+     The diag firmware now benchmarks this directly (`NOR(mm)` row,
+     `ram-test` branch, commit `7c9d910`): memory-mapped NOR read
+     reaches 30-49 MB/s, matching PSRAM's own throughput almost
+     exactly, since both chips share the same OCTOSPI1 peripheral.
+     **Neither indirect NOR mode (SPI or QUAD) represents this board's
+     real read performance -- memory-mapped mode does, and it is not
+     slow at all.**
 
 ## Table of Contents
 - [Nintendo® Game \& Watch™ Retro-Go SD](#nintendo-game--watch-retro-go-sd)
