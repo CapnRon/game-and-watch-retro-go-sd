@@ -209,61 +209,49 @@ branch's own PSRAM-write wall-clock time.
 | PSRAM | Intermediate (104MHz), SS:HALFCYCLE | 🟢 49.1 MB/s | 🟢 48.9 MB/s | 167ns |
 | PSRAM | Maximum (97MHz), SS:HALFCYCLE | 🟢 45.9 MB/s | 🟢 45.7 MB/s | 182ns |
 | PSRAM | Aggressive (101MHz), SS:HALFCYCLE | 🟢 47.7 MB/s | 🟢 47.5 MB/s | 175ns |
-| NOR flash | Stock, IO:SPI (indirect) | 🟠 0.20 MB/s | 🟠 7.55 MB/s | 3.50us |
-| NOR flash | Stock, IO:QUAD (indirect) | 🟠 0.20 MB/s | 🟠 8.81 MB/s | 5.07us |
-| NOR flash | Aggressive, IO:SPI (indirect) | 🟠 0.21 MB/s | 🟠 10.74 MB/s | 2.66us |
-| NOR flash | Aggressive, IO:QUAD (indirect) | 🟠 0.21 MB/s | 🟠 10.70 MB/s | 3.99us |
-| NOR flash | Stock, **memory-mapped** | -- | 🟢 30.08 MB/s | 0.04us |
-| NOR flash | Intermediate, **memory-mapped** | -- | 🟢 48.89 MB/s | 0.03us |
-| NOR flash | Maximum, **memory-mapped** | -- | 🟢 45.66 MB/s | 0.03us |
+| NOR flash (indirect write / memory-mapped read) | Stock | 🟠 0.20 MB/s | 🟢 30.08 MB/s | 0.04us |
+| NOR flash (indirect write / memory-mapped read) | Intermediate | 🟠 0.21 MB/s | 🟢 48.89 MB/s | 0.03us |
+| NOR flash (indirect write / memory-mapped read) | Maximum | 🟠 0.21 MB/s | 🟢 45.66 MB/s | 0.03us |
 
-🟢 = fast, 🟠 = slow, both relative to the other chip/mode. The write
-and read columns are slow for two different, independently confirmed
-reasons:
+🟢 = fast, 🟠 = slow, both relative to PSRAM's own numbers above. NOR's
+row uses **the actual access mode this board's real game firmware uses
+for each column** -- indirect for write, memory-mapped for read -- not
+just whichever mode happened to be easiest to benchmark. Checked
+directly against `gw_flash.c`'s source, not inferred:
 
-- **Write**: NOR is erase-bound -- erase is a fixed internal chip
-  operation, not bound to SPI clock speed, so NOR's write stays flat
-  (~0.20 MB/s) at every clock level while PSRAM's write (no erase step
-  at all) reaches 30-49 MB/s. (An earlier measurement showed 0.14 MB/s
-  here -- that number erased in sixteen separate 4K sector commands
-  instead of the one 64K block-erase command the real driver's
-  `OSPI_Erase()` would actually use for this fully-aligned 64K region,
-  inflating the measured time with per-command overhead a real erase
-  of this region never pays. Fixed in `gw-diag-test` commit `beca092`.)
-  Memory-mapped NOR read has no write number here because this repo's
-  diag firmware never implemented a memory-mapped NOR *write* path
-  (unlike PSRAM's, which this repo's whole branch is about) -- there is
-  nothing to time. It also could not be made to behave like PSRAM's
-  even in principle: NOR still needs erase-first regardless of access
-  method, and a raw memory-mapped store has no way to erase, so it can
-  only ever clear bits, never set them back -- the exact limitation
-  that makes this whole branch's PSRAM write path meaningful in the
-  first place.
-- **Read, indirect mode**: earlier versions of this README went through
-  two wrong explanations for this gap before finding the real one, in
-  order:
-  1. First claim: the diag firmware's NOR read used single-line SPI
-     while PSRAM used quad, and switching NOR to quad would close most
-     of the gap. **Wrong, and retracted** -- measured quad NOR read
-     (8.81 MB/s at Stock) is barely different from single-line
-     (7.55 MB/s), and actually *slower* at higher clock levels. Line
-     width does not explain the gap.
-  2. Second claim, after ruling out line width: the real cause is
-     unidentified, possibly fixed per-command overhead in the
-     diagnostic tool's indirect-mode benchmark. **Confirmed correct,
-     and now measured directly**, not left as a hypothesis: this
-     board's real game firmware never reads NOR with chunked indirect
-     commands at all. `gw_flash.c`'s `OSPI_Init()` ends every boot by
-     enabling memory-mapped mode and leaves it as the resting state --
-     real ROM/asset reads are plain CPU loads through `0x90000000`,
-     autonomous hardware bursts with no per-transaction software call.
-     The diag firmware now benchmarks this directly (`NOR(mm)` row,
-     `ram-test` branch, commit `7c9d910`): memory-mapped NOR read
-     reaches 30-49 MB/s, matching PSRAM's own throughput almost
-     exactly, since both chips share the same OCTOSPI1 peripheral.
-     **Neither indirect NOR mode (SPI or QUAD) represents this board's
-     real read performance -- memory-mapped mode does, and it is not
-     slow at all.**
+- **Read is memory-mapped-only, always.** `OSPI_Init()` ends every boot
+  by enabling memory-mapped mode and leaves it as the resting state.
+  The indirect bulk-read function (`OSPI_Read()`/`OSPI_ReadBytes(CMD(READ),
+  ...)`) has zero callers anywhere in the driver -- every real ROM/asset
+  read goes through the mapped `0x90000000` window, autonomous hardware
+  bursts with no per-command software overhead. That's why NOR's read
+  here (30-49 MB/s) is not slow at all, and lands in the same range as
+  PSRAM's -- both chips share the same OCTOSPI1 peripheral. (Earlier
+  measurements of NOR's *indirect* read -- both single-line and quad --
+  came in far lower, 7.5-10.8 MB/s, and briefly triggered two wrong
+  explanations before this one; that indirect number was never what
+  gameplay actually experiences, so it's dropped from this table.)
+- **Write is indirect-only, always.** NOR is erase-bound regardless of
+  access method -- erase is a fixed internal chip operation, not bound
+  to SPI clock speed, so NOR's write stays flat (~0.20 MB/s) at every
+  clock level while PSRAM's write (no erase step at all) reaches 30-49
+  MB/s. This isn't a gap this repo's diag tooling failed to close: the
+  real stock driver's own memory-mapped write config deliberately
+  reuses the *read* instruction, specifically so a stray store through
+  the mapped pointer re-reads instead of programming the chip ("in
+  order to not alter the flash by accident," per its own code comment).
+  A real memory-mapped NOR write path was built and tested on real
+  hardware anyway (the same DQS errata fix and Strongly-Ordered MPU
+  region that make this branch's PSRAM writes work, applied to NOR's
+  write config) -- every write was a silent no-op, confirmed via an
+  immediate same-session mapped readback showing the pre-write erased
+  value. The exact mechanism wasn't conclusively identified, but the
+  attempt wasn't pursued further once it was clear the reference driver
+  never attempts this either. NOR fundamentally needs erase-first no
+  matter the access method, and a raw memory-mapped store has no way to
+  erase -- it can only ever clear bits, never set them back. That's the
+  exact limitation PSRAM doesn't have, and exactly why this branch's
+  PSRAM write path is worth having at all.
 
 ## Table of Contents
 - [Nintendo® Game \& Watch™ Retro-Go SD](#nintendo-game--watch-retro-go-sd)
