@@ -140,21 +140,43 @@ back down. `circular_flash_write()` (ROM caching) uses this. Every other
 caller of `OSPI_Program()` still gets the older, safe, one-shot behavior
 with no change needed on its part.
 
-### Real-world performance impact: none yet, and here is why
+### Real-world performance impact
 
-Direct on-device timing (a hardware cycle counter around the SD card
-read and the PSRAM write, during a real ROM load) shows this clearly.
-For a 684KB ROM: the SD card read took 611 ms. The PSRAM write took
-14 ms. The SD card read is the real bottleneck, by a wide margin. A
-faster PSRAM write barely changes the total load time on current
-hardware.
+This branch's write path replaces NOR's write path, not just PSRAM's
+own older indirect-write code. That comparison is the one that matters,
+and it is large and measured, not theoretical.
 
-This work is still worth having. It gives a real, correct,
-memory-mapped write path for the day a faster storage path exists. One
-example is an ESP32 board on SDMMC in 4-bit mode, instead of the
-STM32's current SPI connection to the SD card. On that future
-hardware, the PSRAM write speed could matter. On today's hardware, it
-does not, and this branch does not claim otherwise.
+NOR write is erase-bound. A NOR write is always erase-then-program, and
+erase is a fixed internal chip operation with a real minimum time that
+does not get faster no matter how fast the SPI bus runs. Measured on
+real hardware (see [Measured throughput](#measured-throughput-companion-diagnostic-firmware)
+below): NOR writes at a flat 0.14 MB/s at every clock level tested,
+Stock through Aggressive. PSRAM has no erase step at all, so it carries
+none of that penalty -- this branch's memory-mapped PSRAM write path
+does not inherit NOR's fundamental write bottleneck, at any clock
+speed. Any code path that used to write ROM/save data through NOR
+(the stock, unmodified hardware this board started as) is not just
+faster on this branch, it is a different class of operation entirely.
+
+Within *this branch's own* ROM-caching path specifically, there is a
+narrower, separate finding: direct on-device timing (a hardware cycle
+counter around the SD card read and the PSRAM write, during a real ROM
+load) shows the SD card read, not the PSRAM write, is the bottleneck
+for total wall-clock cache time. For a 684KB ROM: the SD card read took
+611 ms, the PSRAM write took 14 ms. Making that already-fast 14 ms
+write even faster (indirect vs. memory-mapped) does not move the total
+load time, because SD read dominates it by a wide margin. That
+narrower result is still true and still worth knowing -- it explains
+why this branch does not additionally chase PSRAM write throughput as
+a route to faster ROM loads on current hardware -- but it is a
+statement about SD vs. PSRAM within this branch, not a statement that
+the PSRAM-over-NOR write path has no real-world benefit. It does; NOR's
+erase bottleneck is gone.
+
+The next real lever for faster ROM loads is SD read speed, not PSRAM
+write speed: once the ESP32 convergence board is in place, SD will be
+on SDMMC 4-bit from the ESP32 side rather than the STM32's current SPI
+connection.
 
 ### Verification
 
@@ -179,8 +201,10 @@ peripheral errata.
 
 This repo does not build its own on-device benchmark. The figures below
 come from the companion diagnostic firmware above, run on the same board
-family, and are the real numbers behind the "SD read dominates" claim in
-this section:
+family, and are the real numbers behind both claims in
+[Real-world performance impact](#real-world-performance-impact) above:
+NOR's flat, erase-bound write throughput, and SD read dominating this
+branch's own PSRAM-write wall-clock time.
 
 | Device | Clock level | Write | Read | Latency |
 |---|---|---|---|---|
