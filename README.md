@@ -202,30 +202,32 @@ branch's own PSRAM-write wall-clock time.
 | AXI RAM_EMU | Aggressive | 336.9 MB/s | 291.2 MB/s | 31ns |
 | AHB SRAM1/2 | Stock | 194.2 MB/s | 92.8 MB/s | 50ns |
 | AHB SRAM1/2 | Aggressive | 245.3 MB/s | ~117 MB/s | 40ns |
-| PSRAM | Stock (64MHz), SS:NONE | 🟢 30.2 MB/s | 30.1 MB/s | 279ns |
-| PSRAM | Stock (64MHz), SS:HALFCYCLE | 🟢 30.2 MB/s | 30.1 MB/s | 279ns |
-| PSRAM | Intermediate (104MHz), SS:HALFCYCLE | 🟢 49.1 MB/s | 48.9 MB/s | 167ns |
-| PSRAM | Maximum (97MHz), SS:HALFCYCLE | 🟢 45.9 MB/s | 45.7 MB/s | 182ns |
-| PSRAM | Aggressive (101MHz), SS:HALFCYCLE | 🟢 47.7 MB/s | 47.5 MB/s | 175ns |
-| NOR flash | Stock | 🟠 0.14 MB/s | 7.55 MB/s | 3.39us |
-| NOR flash | Aggressive | 🟠 0.14 MB/s | 10.82 MB/s | 2.44us |
+| PSRAM | Stock (64MHz), SS:NONE | 🟢 30.2 MB/s | 🟢 30.1 MB/s | 279ns |
+| PSRAM | Stock (64MHz), SS:HALFCYCLE | 🟢 30.2 MB/s | 🟢 30.1 MB/s | 279ns |
+| PSRAM | Intermediate (104MHz), SS:HALFCYCLE | 🟢 49.1 MB/s | 🟢 48.9 MB/s | 167ns |
+| PSRAM | Maximum (97MHz), SS:HALFCYCLE | 🟢 45.9 MB/s | 🟢 45.7 MB/s | 182ns |
+| PSRAM | Aggressive (101MHz), SS:HALFCYCLE | 🟢 47.7 MB/s | 🟢 47.5 MB/s | 175ns |
+| NOR flash | Stock | 🟠 0.14 MB/s | 🟠¹ 7.55 MB/s | 3.39us |
+| NOR flash | Aggressive | 🟠 0.14 MB/s | 🟠¹ 10.82 MB/s | 2.44us |
 
-🟢 = write, no erase step, fast at every clock level 🟠 = write, erase-bound,
-flat regardless of clock level. Read columns are left unmarked -- NOR's
-read isn't erase-bound, it's just a slower bus than PSRAM's, a different
-and much smaller effect than the write-side difference this table exists
-to show.
+🟢 = fast, 🟠 = slow, both relative to the other chip on the same row.
+The write and read columns are slow for two different reasons, not one:
+
+- **Write** (no superscript): NOR is erase-bound -- erase is a fixed
+  internal chip operation, not bound to SPI clock speed, so NOR's write
+  stays flat (~0.14 MB/s) at every clock level while PSRAM's write (no
+  erase step at all) reaches 30-49 MB/s.
+- **Read** (¹): NOR's read here uses single-line (1-1-1) SPI, while
+  PSRAM's uses quad (1-4-4) -- 4 data lines instead of 1. That alone
+  accounts for most of the ~4-5x gap (NOR: 7.55-10.82 MB/s vs PSRAM:
+  30.1-48.9 MB/s); it is not erase-bound, and it does scale with clock
+  level, unlike the write column.
 
 NOR's write number is a real erase+program+verify cycle, not a
-placeholder -- it stays flat across clock levels because sector-erase
-time is a fixed internal chip operation, not bound to SPI clock speed,
-unlike NOR's read throughput which does scale with it (7.55 -> 10.82
-MB/s). This is the same "erase/program dominates, and does not get
-faster with a higher bus clock" behavior that motivates the
-memory-mapped PSRAM write work in this repo in the first place -- PSRAM
-has no erase step at all, which is exactly why its write path can be
-made fast (30-49 MB/s here, all real erase-free page writes) while
-NOR's fundamentally cannot.
+placeholder. The write-side gap is the one that motivates the
+memory-mapped PSRAM write work in this repo -- it is categorically
+worse for NOR (flat, clock-independent) than the read-side gap (scales
+with clock, bus-width-limited).
 
 ## Table of Contents
 - [Nintendo® Game \& Watch™ Retro-Go SD](#nintendo-game--watch-retro-go-sd)
