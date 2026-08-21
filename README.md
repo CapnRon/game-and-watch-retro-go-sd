@@ -202,13 +202,19 @@ branch's own PSRAM-write wall-clock time.
 | AXI RAM_EMU | Aggressive | 336.9 MB/s | 291.2 MB/s | 31ns |
 | AHB SRAM1/2 | Stock | 194.2 MB/s | 92.8 MB/s | 50ns |
 | AHB SRAM1/2 | Aggressive | 245.3 MB/s | ~117 MB/s | 40ns |
-| PSRAM | Stock (64MHz), SS:NONE | 30.2 MB/s | 30.1 MB/s | 279ns |
-| PSRAM | Stock (64MHz), SS:HALFCYCLE | 30.2 MB/s | 30.1 MB/s | 279ns |
-| PSRAM | Intermediate (104MHz), SS:HALFCYCLE | 49.1 MB/s | 48.9 MB/s | 167ns |
-| PSRAM | Maximum (97MHz), SS:HALFCYCLE | 45.9 MB/s | 45.7 MB/s | 182ns |
-| PSRAM | Aggressive (101MHz), SS:HALFCYCLE | 47.7 MB/s | 47.5 MB/s | 175ns |
-| NOR flash | Stock | 0.14 MB/s | 7.55 MB/s | 3.39us |
-| NOR flash | Aggressive | 0.14 MB/s | 10.82 MB/s | 2.44us |
+| PSRAM | Stock (64MHz), SS:NONE | 🟢 30.2 MB/s | 30.1 MB/s | 279ns |
+| PSRAM | Stock (64MHz), SS:HALFCYCLE | 🟢 30.2 MB/s | 30.1 MB/s | 279ns |
+| PSRAM | Intermediate (104MHz), SS:HALFCYCLE | 🟢 49.1 MB/s | 48.9 MB/s | 167ns |
+| PSRAM | Maximum (97MHz), SS:HALFCYCLE | 🟢 45.9 MB/s | 45.7 MB/s | 182ns |
+| PSRAM | Aggressive (101MHz), SS:HALFCYCLE | 🟢 47.7 MB/s | 47.5 MB/s | 175ns |
+| NOR flash | Stock | 🟠 0.14 MB/s | 7.55 MB/s | 3.39us |
+| NOR flash | Aggressive | 🟠 0.14 MB/s | 10.82 MB/s | 2.44us |
+
+🟢 = write, no erase step, fast at every clock level 🟠 = write, erase-bound,
+flat regardless of clock level. Read columns are left unmarked -- NOR's
+read isn't erase-bound, it's just a slower bus than PSRAM's, a different
+and much smaller effect than the write-side difference this table exists
+to show.
 
 NOR's write number is a real erase+program+verify cycle, not a
 placeholder -- it stays flat across clock levels because sector-erase
