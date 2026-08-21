@@ -6,83 +6,6 @@ A comprehensive emulator collection for the Nintendo® Game & Watch™ with SD C
 
 If you are looking for the mod without SD Card (Flash mod only), check https://github.com/sylverb/game-and-watch-retro-go
 
-## Table of Contents
-- [Nintendo® Game \& Watch™ Retro-Go SD](#nintendo-game--watch-retro-go-sd)
-  - [Table of Contents](#table-of-contents)
-  - [Support Development](#support-development)
-  - [Features](#features)
-  - [Installation](#installation)
-    - [Pre-modded Options](#pre-modded-options)
-    - [Hardware Requirements](#hardware-requirements)
-    - [Installation Steps](#installation-steps)
-    - [Cutting the shell for SD Card slot](#cutting-the-shell-for-sd-card-slot)
-    - [Shell Replacement](#shell-replacement)
-    - [Retro-Go-SD Update Steps](#retro-go-sd-update-steps)
-    - [Bootloader Update Steps](#bootloader-update-steps)
-  - [Tools](#tools)
-    - [Cover Art Generator (gencovers.py)](#cover-art-generator-gencoverspy)
-      - [Usage](#usage)
-      - [Options](#options)
-    - [Pico-8 Cover Art  Generator ( pico8covers.py )](#pico-8-cover-art--generator--pico8coverspy-)
-      - [Usage:](#usage-1)
-  - [Supported Systems](#supported-systems)
-    - [Emulators](#emulators)
-    - [SNES Ports](#snes-ports)
-    - [Homebrew Ports](#homebrew-ports)
-  - [Notes for specific systems](#notes-for-specific-systems)
-    - [Game Boy Advance](#game-boy-advance)
-    - [PC Engine CD / TurboGrafx-CD](#pc-engine-cd--turbografx-cd)
-    - [Atari Lynx](#atari-lynx)
-  - [Controls](#controls)
-    - [Button Mappings](#button-mappings)
-    - [Macros](#macros)
-  - [Troubleshooting](#troubleshooting)
-  - [FAQ](#faq)
-  - [Cheat codes](#cheat-codes)
-    - [Cheat codes on NES System](#cheat-codes-on-nes-system)
-    - [Cheat codes on GB System](#cheat-codes-on-gb-system)
-    - [Cheat codes on PCE System](#cheat-codes-on-pce-system)
-    - [Cheat codes on MSX System](#cheat-codes-on-msx-system)
-  - [NES Emulator](#nes-emulator)
-  - [MSX Emulator](#msx-emulator)
-  - [Amstrad CPC6128 Emulator](#amstrad-cpc6128-emulator)
-  - [Vectrex/Odyssey2 Emulator (not included in SD Card version yet)](#vectrexodyssey2-emulator-not-included-in-sd-card-version-yet)
-- [Pokémon Mini Emulator](#pokémon-mini-emulator)
-  - [Homebrew ports](#homebrew-ports-1)
-    - [The Legend of Zelda: A Link to the Past](#the-legend-of-zelda-a-link-to-the-past)
-      - [Alternate languages](#alternate-languages)
-    - [Super Mario World](#super-mario-world)
-    - [Celeste Classic](#celeste-classic)
-  - [Pico-8](#pico-8)
-    - [Compatibility and performance](#compatibility-and-performance)
-    - [Installation](#installation-1)
-    - [Loading carts](#loading-carts)
-    - [Covers](#covers)
-  - [Developer info](#developer-info)
-    - [Build and flash using Docker](#build-and-flash-using-docker)
-  - [Discord, support and discussion](#discord-support-and-discussion)
-  - [License](#license)
-
-## Support Development
-
-You can support the development by donating via [PayPal](https://paypal.me/revlys)
-
-## Features
-
-- 🎮 Support for multiple retro gaming systems
-- 💾 SD Card storage for ROMs and games
-- 💾 4 save state slots per game
-- 🎨 Cover art support
-- 🔄 Easy firmware updates
-- 🌐 Unicode support (Latin and Cyrillic, more to come)
-- 🎯 Cheat code support for multiple systems
-- 🔄 Dual boot capability (original firmware preservation)
-
-Current limitations :
-- Up to 1000 roms/disks will be visible for each system
-- CJK characters not yet visible
-
-
 ## PSRAM-only port (`psram-only` branch)
 
 This branch is a variant of the repo that runs **without the external NOR
@@ -162,6 +85,171 @@ gnwmanager sdpush --file sd_content/cores/nes_fceu.bin --dest-path /cores/
 - **Flasher**: [CapnRon/gnwmanager](https://github.com/CapnRon/gnwmanager)
   branch `psram-only` - gnwmanager bootloader tolerant of a missing NOR
   (never fails init on unknown IDs, IWDG-safe flash erase).
+
+## Full memory-mapped PSRAM (`psram-only-full-mmap` branch)
+
+This branch adds real memory-mapped **writes** to the PSRAM port above.
+The `psram-only` branch already maps PSRAM reads to address `0x90000000`.
+This branch maps writes to the same address. ROM caching, save files, and
+erase now all go through this direct memory access. The old code sent
+each write as a separate indirect command.
+
+### Two hardware problems, both required a fix
+
+**Problem 1: a chip errata blocks memory-mapped writes.** The STM32H7
+series has a documented silicon errata (ST errata sheet, item 2.8.6). It
+states: "Memory-mapped write error response when DQS output is
+disabled." On this chip family, the OCTOSPI peripheral processes
+memory-mapped writes in 64-bit blocks. It needs the DQS signal to select
+the correct bytes within each block. Without DQS enabled, a memory-mapped
+write returns a bus error. This happens for any write size, even a
+single 4-byte word. This PSRAM chip has no physical DQS pin and does not
+use one for normal operation. The fix enables DQS anyway, in the write
+configuration only, purely to work around this internal SoC behavior.
+This fix lives in `OSPI_EnableMemoryMappedMode()` in `gw_flash.c`.
+
+**Problem 2: cache write-back can corrupt a multi-word write burst.**
+The CPU's data cache uses write-back mode for this memory region by
+default. A multi-word write can get merged, reordered, or delayed by the
+cache before it reaches the bus. The OCTOSPI peripheral expects one
+continuous burst for each write command. A reordered burst breaks that
+expectation and the write fails. The fix adds a new MPU region for the
+whole `0x90000000` window. This region uses Strongly Ordered memory
+type during a write, which disables caching and forces every access
+straight to the bus. This function is `mpu_set_psram_writable()` in
+`main.c`.
+
+This second fix needs care. Strongly Ordered memory does not allow
+unaligned access at all, by ARM's own rule, not by a setting we control.
+Normal game code reads ROM and asset data with plain, everyday unaligned
+loads. Leaving the region in Strongly Ordered mode after a write breaks
+these reads immediately. On real hardware, leaving it on by mistake broke
+Zelda3 within seconds of normal play. The fix switches this MPU region on
+only for the duration of a write burst, then switches it back off before
+any code reads from the region again.
+
+### Batched writes
+
+The first version of this fix set up and tore down the write path for
+every single 256-byte chunk. ROM caching can call this thousands of
+times for one game. The fixed setup and teardown cost then became larger
+than the time saved by the faster write itself. `OSPI_BeginWriteBatch()`
+and `OSPI_EndWriteBatch()` fix this. They let a caller set up the write
+path once for a whole transfer, then write many chunks before tearing it
+back down. `circular_flash_write()` (ROM caching) uses this. Every other
+caller of `OSPI_Program()` still gets the older, safe, one-shot behavior
+with no change needed on its part.
+
+### Real-world performance impact: none yet, and here is why
+
+Direct on-device timing (a hardware cycle counter around the SD card
+read and the PSRAM write, during a real ROM load) shows this clearly.
+For a 684KB ROM: the SD card read took 611 ms. The PSRAM write took
+14 ms. The SD card read is the real bottleneck, by a wide margin. A
+faster PSRAM write barely changes the total load time on current
+hardware.
+
+This work is still worth having. It gives a real, correct,
+memory-mapped write path for the day a faster storage path exists. One
+example is an ESP32 board on SDMMC in 4-bit mode, instead of the
+STM32's current SPI connection to the SD card. On that future
+hardware, the PSRAM write speed could matter. On today's hardware, it
+does not, and this branch does not claim otherwise.
+
+### Verification
+
+All fixes were confirmed on real hardware, not only in theory:
+
+- A raw memory-mapped write test, from one word up to a full 4MB write,
+  with no game code involved.
+- Real ROM caching, end to end, for a title that had crashed on this
+  exact code path before ("Zelda 3").
+- Direct cycle-counter timing, as described above.
+
+### Companion errata reference
+
+The DQS errata fix was found and verified first in the sibling
+diagnostic firmware
+([CapnRon/gnw-stm32h7b0-diag-firmware](https://github.com/CapnRon/gnw-stm32h7b0-diag-firmware),
+branch `ram-test`), which has its own memory-mapped PSRAM benchmark.
+Both repos need this same fix, since they share the same OCTOSPI
+peripheral errata.
+
+## Table of Contents
+- [Nintendo® Game \& Watch™ Retro-Go SD](#nintendo-game--watch-retro-go-sd)
+  - [Table of Contents](#table-of-contents)
+  - [Support Development](#support-development)
+  - [Features](#features)
+  - [Installation](#installation)
+    - [Pre-modded Options](#pre-modded-options)
+    - [Hardware Requirements](#hardware-requirements)
+    - [Installation Steps](#installation-steps)
+    - [Cutting the shell for SD Card slot](#cutting-the-shell-for-sd-card-slot)
+    - [Shell Replacement](#shell-replacement)
+    - [Retro-Go-SD Update Steps](#retro-go-sd-update-steps)
+    - [Bootloader Update Steps](#bootloader-update-steps)
+  - [Tools](#tools)
+    - [Cover Art Generator (gencovers.py)](#cover-art-generator-gencoverspy)
+      - [Usage](#usage)
+      - [Options](#options)
+    - [Pico-8 Cover Art  Generator ( pico8covers.py )](#pico-8-cover-art--generator--pico8coverspy-)
+      - [Usage:](#usage-1)
+  - [Supported Systems](#supported-systems)
+    - [Emulators](#emulators)
+    - [SNES Ports](#snes-ports)
+    - [Homebrew Ports](#homebrew-ports)
+  - [Notes for specific systems](#notes-for-specific-systems)
+    - [Game Boy Advance](#game-boy-advance)
+    - [PC Engine CD / TurboGrafx-CD](#pc-engine-cd--turbografx-cd)
+    - [Atari Lynx](#atari-lynx)
+  - [Controls](#controls)
+    - [Button Mappings](#button-mappings)
+    - [Macros](#macros)
+  - [Troubleshooting](#troubleshooting)
+  - [FAQ](#faq)
+  - [Cheat codes](#cheat-codes)
+    - [Cheat codes on NES System](#cheat-codes-on-nes-system)
+    - [Cheat codes on GB System](#cheat-codes-on-gb-system)
+    - [Cheat codes on PCE System](#cheat-codes-on-pce-system)
+    - [Cheat codes on MSX System](#cheat-codes-on-msx-system)
+  - [NES Emulator](#nes-emulator)
+  - [MSX Emulator](#msx-emulator)
+  - [Amstrad CPC6128 Emulator](#amstrad-cpc6128-emulator)
+  - [Vectrex/Odyssey2 Emulator (not included in SD Card version yet)](#vectrexodyssey2-emulator-not-included-in-sd-card-version-yet)
+- [Pokémon Mini Emulator](#pokémon-mini-emulator)
+  - [Homebrew ports](#homebrew-ports-1)
+    - [The Legend of Zelda: A Link to the Past](#the-legend-of-zelda-a-link-to-the-past)
+      - [Alternate languages](#alternate-languages)
+    - [Super Mario World](#super-mario-world)
+    - [Celeste Classic](#celeste-classic)
+  - [Pico-8](#pico-8)
+    - [Compatibility and performance](#compatibility-and-performance)
+    - [Installation](#installation-1)
+    - [Loading carts](#loading-carts)
+    - [Covers](#covers)
+  - [Developer info](#developer-info)
+    - [Build and flash using Docker](#build-and-flash-using-docker)
+  - [Discord, support and discussion](#discord-support-and-discussion)
+  - [License](#license)
+
+## Support Development
+
+You can support the development by donating via [PayPal](https://paypal.me/revlys)
+
+## Features
+
+- 🎮 Support for multiple retro gaming systems
+- 💾 SD Card storage for ROMs and games
+- 💾 4 save state slots per game
+- 🎨 Cover art support
+- 🔄 Easy firmware updates
+- 🌐 Unicode support (Latin and Cyrillic, more to come)
+- 🎯 Cheat code support for multiple systems
+- 🔄 Dual boot capability (original firmware preservation)
+
+Current limitations :
+- Up to 1000 roms/disks will be visible for each system
+- CJK characters not yet visible
 
 ## Installation
 
