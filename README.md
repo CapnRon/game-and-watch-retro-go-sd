@@ -218,10 +218,19 @@ The write and read columns are slow for two different reasons, not one:
   stays flat (~0.14 MB/s) at every clock level while PSRAM's write (no
   erase step at all) reaches 30-49 MB/s.
 - **Read** (¹): NOR's read here uses single-line (1-1-1) SPI, while
-  PSRAM's uses quad (1-4-4) -- 4 data lines instead of 1. That alone
-  accounts for most of the ~4-5x gap (NOR: 7.55-10.82 MB/s vs PSRAM:
-  30.1-48.9 MB/s); it is not erase-bound, and it does scale with clock
-  level, unlike the write column.
+  PSRAM's uses quad (1-4-4) -- 4 data lines instead of 1, which accounts
+  for most of the ~4-5x gap (NOR: 7.55-10.82 MB/s vs PSRAM: 30.1-48.9
+  MB/s). **This is a diagnostic-tool artifact, not a real NOR
+  limitation**: the diag firmware's NOR test deliberately uses the
+  universal single-line opcode so it works without first knowing which
+  chip is installed, but this board's actual game firmware
+  (`gw_flash.c`'s `cmds_quad_32b_mx` table, confirmed against this same
+  MX25U51245G) reads NOR in quad mode too (`0xEC`, 4 data lines,
+  6 dummy cycles) -- the same width as PSRAM. Real in-game NOR read
+  throughput is not measured here and is likely much closer to PSRAM's
+  than this table shows. The write-side gap has no such caveat: it is
+  erase-bound regardless of data-line width, since erase has no data
+  phase at all to speed up.
 
 NOR's write number is a real erase+program+verify cycle, not a
 placeholder. The write-side gap is the one that motivates the
