@@ -150,8 +150,10 @@ measured, not theoretical.
 NOR write is erase-bound. A NOR write is always erase-then-program, and
 erase is a fixed internal chip operation with a real minimum time that
 does not get faster no matter how fast the SPI bus runs. Measured on
-real hardware (see [Measured throughput](#measured-throughput-companion-diagnostic-firmware)
-below): NOR writes at a flat 0.14 MB/s at every clock level tested,
+real hardware, erasing with the largest block the region allows (the
+same choice the real driver's `OSPI_Erase()` makes -- see [Measured
+throughput](#measured-throughput-companion-diagnostic-firmware)
+below): NOR writes at a flat ~0.20 MB/s at every clock level tested,
 Stock through Aggressive. PSRAM has no erase step at all, so it carries
 none of that penalty -- this branch's memory-mapped PSRAM write is not
 just faster than NOR's write, it is a different class of operation
@@ -207,10 +209,10 @@ branch's own PSRAM-write wall-clock time.
 | PSRAM | Intermediate (104MHz), SS:HALFCYCLE | 🟢 49.1 MB/s | 🟢 48.9 MB/s | 167ns |
 | PSRAM | Maximum (97MHz), SS:HALFCYCLE | 🟢 45.9 MB/s | 🟢 45.7 MB/s | 182ns |
 | PSRAM | Aggressive (101MHz), SS:HALFCYCLE | 🟢 47.7 MB/s | 🟢 47.5 MB/s | 175ns |
-| NOR flash | Stock, IO:SPI (indirect) | 🟠 0.14 MB/s | 🟠 7.55 MB/s | 3.50us |
-| NOR flash | Stock, IO:QUAD (indirect) | 🟠 0.14 MB/s | 🟠 8.81 MB/s | 5.07us |
-| NOR flash | Aggressive, IO:SPI (indirect) | 🟠 0.14 MB/s | 🟠 10.74 MB/s | 2.66us |
-| NOR flash | Aggressive, IO:QUAD (indirect) | 🟠 0.14 MB/s | 🟠 10.70 MB/s | 3.99us |
+| NOR flash | Stock, IO:SPI (indirect) | 🟠 0.20 MB/s | 🟠 7.55 MB/s | 3.50us |
+| NOR flash | Stock, IO:QUAD (indirect) | 🟠 0.20 MB/s | 🟠 8.81 MB/s | 5.07us |
+| NOR flash | Aggressive, IO:SPI (indirect) | 🟠 0.21 MB/s | 🟠 10.74 MB/s | 2.66us |
+| NOR flash | Aggressive, IO:QUAD (indirect) | 🟠 0.21 MB/s | 🟠 10.70 MB/s | 3.99us |
 | NOR flash | Stock, **memory-mapped** | -- | 🟢 30.08 MB/s | 0.04us |
 | NOR flash | Intermediate, **memory-mapped** | -- | 🟢 48.89 MB/s | 0.03us |
 | NOR flash | Maximum, **memory-mapped** | -- | 🟢 45.66 MB/s | 0.03us |
@@ -221,11 +223,22 @@ reasons:
 
 - **Write**: NOR is erase-bound -- erase is a fixed internal chip
   operation, not bound to SPI clock speed, so NOR's write stays flat
-  (~0.14 MB/s) at every clock level while PSRAM's write (no erase step
-  at all) reaches 30-49 MB/s. Memory-mapped NOR read has no write
-  number here because this repo's diag firmware never implemented a
-  memory-mapped NOR *write* path (unlike PSRAM's, which this repo's
-  whole branch is about) -- there is nothing to time.
+  (~0.20 MB/s) at every clock level while PSRAM's write (no erase step
+  at all) reaches 30-49 MB/s. (An earlier measurement showed 0.14 MB/s
+  here -- that number erased in sixteen separate 4K sector commands
+  instead of the one 64K block-erase command the real driver's
+  `OSPI_Erase()` would actually use for this fully-aligned 64K region,
+  inflating the measured time with per-command overhead a real erase
+  of this region never pays. Fixed in `gw-diag-test` commit `beca092`.)
+  Memory-mapped NOR read has no write number here because this repo's
+  diag firmware never implemented a memory-mapped NOR *write* path
+  (unlike PSRAM's, which this repo's whole branch is about) -- there is
+  nothing to time. It also could not be made to behave like PSRAM's
+  even in principle: NOR still needs erase-first regardless of access
+  method, and a raw memory-mapped store has no way to erase, so it can
+  only ever clear bits, never set them back -- the exact limitation
+  that makes this whole branch's PSRAM write path meaningful in the
+  first place.
 - **Read, indirect mode**: earlier versions of this README went through
   two wrong explanations for this gap before finding the real one, in
   order:
