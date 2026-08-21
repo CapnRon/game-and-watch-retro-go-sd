@@ -1418,6 +1418,89 @@ void mpu_set_lcd_pool_uncached_range(uint32_t framebuffer_bytes)
   HAL_MPU_ConfigRegion(&MPU_InitStruct);
 }
 
+/* Toggles MPU region 7 (0x90000000, the OSPI1 memory-mapped PSRAM window)
+ * between two states:
+ *
+ *  - writable=true: Strongly Ordered (TEX=0, non-cacheable,
+ *    non-bufferable). Required for memory-mapped writes to be safe on
+ *    this hardware -- without it, a multi-word write burst can have its
+ *    individual stores merged/reordered/delayed by D-Cache write-back
+ *    relative to what the OCTOSPI peripheral's SPI protocol state
+ *    machine expects for one continuous burst, which reliably hangs/
+ *    faults (HAL_OSPI_Abort()'s wait-for-flag timeout).
+ *  - writable=false: region disabled entirely, falling back to the
+ *    default "External RAM" attributes (Normal, Cacheable, Write-Back).
+ *    Required for reads -- Strongly Ordered does not permit unaligned
+ *    accesses at all (an ARM architecture rule, not a config choice),
+ *    and ordinary gameplay code doing unaligned reads from mapped ROM/
+ *    asset data (completely normal, always worked before) hard-faults
+ *    immediately under Strongly Ordered. Confirmed on real hardware:
+ *    leaving Strongly Ordered on permanently broke Zelda3 within
+ *    seconds of normal play.
+ *
+ * Callers (gw_flash.c's PSRAM write/erase paths) must call this with
+ * writable=true immediately before enabling memory-mapped mode for a
+ * write burst, and writable=false immediately after disabling it and
+ * before memory-mapped mode is re-enabled for reads -- get the ordering
+ * wrong and either writes fault (wrong region active) or reads fault
+ * (Strongly Ordered left on). Does NOT call HAL_MPU_Disable()/Enable()
+ * -- see the doc comment inside the function for why. */
+void mpu_set_psram_writable(bool writable)
+{
+  /* static, not stack-local: called twice per 256-byte chunk from inside
+   * OSPI_MMWrite(), nested directly on top of circular_flash_write()'s
+   * already-tight 4KB-buffer stack frame -- same reasoning as
+   * OSPI_EnableMemoryMappedMode()'s locals in gw_flash.c, see that doc
+   * comment for the actual hardfault this caused before both were made
+   * static. */
+  static MPU_Region_InitTypeDef MPU_InitStruct;
+
+  /* Deliberately does NOT call HAL_MPU_Disable()/HAL_MPU_Enable(). Those
+   * touch MPU->CTRL, which gates protection for every region, not just
+   * region 7 -- and this function gets called twice per 256-byte chunk
+   * during ROM caching (circular_flash_write()'s loop), i.e. hundreds to
+   * thousands of times per large ROM, while the screen is actively
+   * showing a progress bar (LTDC DMA continuously running). A first
+   * version of this function did call Disable/Enable, and briefly
+   * dropping MPU protection for *every* region on *every* chunk --
+   * including region 0, whose own doc comment says it "must stay
+   * non-cacheable for SAI DMA coherence", and the LCD framebuffer
+   * regions 3-6 -- produced real, intermittent corruption serious enough
+   * to hardfault Zelda3 with a wild function-pointer call several stack
+   * frames away from anything OSPI-related. HAL_MPU_ConfigRegion() only
+   * touches the one region's own RBAR/RASR (confirmed by reading the HAL
+   * source, not assumed) -- MPU->CTRL, and every other region's
+   * protection, are never touched here, so this is safe to call from
+   * inside an interrupt-heavy, DMA-active context without a coherency
+   * gap for anything else. */
+  MPU_InitStruct.Number           = MPU_REGION_NUMBER7;
+  MPU_InitStruct.BaseAddress      = 0x90000000;
+  MPU_InitStruct.Size             = MPU_REGION_SIZE_4MB;
+  MPU_InitStruct.SubRegionDisable = 0x0;
+  MPU_InitStruct.TypeExtField     = MPU_TEX_LEVEL0;
+  MPU_InitStruct.AccessPermission = MPU_REGION_FULL_ACCESS;
+  MPU_InitStruct.DisableExec      = MPU_INSTRUCTION_ACCESS_DISABLE;
+  MPU_InitStruct.IsShareable      = MPU_ACCESS_NOT_SHAREABLE;
+
+  if (writable) {
+    MPU_InitStruct.Enable      = MPU_REGION_ENABLE;
+    MPU_InitStruct.IsCacheable  = MPU_ACCESS_NOT_CACHEABLE;
+    MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
+  } else {
+    MPU_InitStruct.Enable = MPU_REGION_DISABLE;
+  }
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+
+  /* Ensure the new region config is visible to subsequent memory
+   * accesses before this function returns -- HAL_MPU_ConfigRegion()
+   * itself doesn't barrier this (confirmed from its source: it only
+   * writes RNR/RBAR/RASR, no DSB/ISB), matching the same requirement
+   * HAL_MPU_Enable() enforces after its own MPU->CTRL write. */
+  __DSB();
+  __ISB();
+}
+
 /**
   * @brief  This function is executed in case of error occurrence.
   * @retval None

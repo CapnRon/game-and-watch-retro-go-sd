@@ -338,6 +338,7 @@ const flash_cmd_t cmds_quad_32b_wb[CMD_COUNT] = {
 static void init_spansion(void);
 static void init_mx_issi(void);
 static void init_winbond(void);
+static void OSPI_MMWrite(uint32_t address, const uint8_t *data, size_t len);
 
 /* PSRAM-only driver configuration.
  * ISSI IS66WVS4M8FALL (4MB, 1024-byte pages):
@@ -549,8 +550,15 @@ static void wait_for_status(uint8_t mask, uint8_t value, uint32_t timeout)
 
 void OSPI_EnableMemoryMappedMode(void)
 {
-    OSPI_MemoryMappedTypeDef sMemMappedCfg;
-    OSPI_RegularCmdTypeDef ospi_cmd;
+    /* static, not stack-local: this now gets called once per 256-byte
+     * chunk from inside OSPI_MMWrite() (PSRAM writes), nested directly on
+     * top of circular_flash_write()'s already-tight 4KB-buffer stack
+     * frame (see its own doc comment -- this exact call chain has already
+     * hardfaulted from stack overflow once before, at a smaller total
+     * depth than this adds). OSPI access is inherently serialized through
+     * one hardware peripheral anyway, so static is safe here. */
+    static OSPI_MemoryMappedTypeDef sMemMappedCfg;
+    static OSPI_RegularCmdTypeDef ospi_cmd;
     const flash_cmd_t *cmd = CMD(READ);
 
     if(flash.mem_mapped_enabled){
@@ -565,10 +573,28 @@ void OSPI_EnableMemoryMappedMode(void)
         Error_Handler();
     }
 
-    // Configure the WRITE command (0x02 page write) so that memory-mapped
-    // writes to 0x90000000 go straight through to the PSRAM.
+    // Configure the WRITE command (0x02 page write, or 0x38 quad on the
+    // PSRAM config) so that memory-mapped writes to 0x90000000 go
+    // straight through to the PSRAM.
     set_ospi_cmd(&ospi_cmd, CMD(PP), 0, NULL, 0);
     ospi_cmd.OperationType = HAL_OSPI_OPTYPE_WRITE_CFG;
+    // DQSMode = ENABLE here, deliberately different from set_ospi_cmd()'s
+    // DISABLE default above, per STM32H72x/73x errata 2.8.6
+    // "Memory-mapped write error response when DQS output is disabled":
+    // on parts with the OCTOSPI memory-mapped region on the AXI bus,
+    // writes are always done internally in 64-bit chunks, with DQS used
+    // to mask down to the actual access size. With DQS disabled that
+    // masking breaks and the write comes back as an AXI bus error --
+    // reproducibly, for any memory-mapped write, down to a single word
+    // (confirmed on real STM32H7B0 hardware, gw-diag-test repo). Neither
+    // the PSRAM nor any currently-configured NOR flash chip has a
+    // physical DQS pin -- this is purely a workaround for the SoC's
+    // internal AXI-write masking, not anything the external chip needs.
+    // Currently dormant here: nothing in this codebase stores through
+    // the mapped pointer yet (littlefs/flash_alloc writes always go
+    // through indirect OSPI_Program() first), so this fixes a real bug
+    // before it's ever hit rather than changing current behavior.
+    ospi_cmd.DQSMode = HAL_OSPI_DQS_ENABLE;
     if (HAL_OSPI_Command(flash.hospi, &ospi_cmd, HAL_OSPI_TIMEOUT_DEFAULT_VALUE) != HAL_OK) {
         Error_Handler();
     }
@@ -604,17 +630,17 @@ static void _OSPI_Erase(const flash_cmd_t *cmd, uint32_t address)
     (void)cmd;
 
     // PSRAM has no erase opcodes; the erase contract is just "reads return
-    // 0xFF". Fill the 4KB block with 256-byte indirect page writes (the
-    // 02h write command). NOTE: a memset through the memory-mapped window
-    // was tried as a fast path but faults (IMPRECISERR) on this board, so
-    // the indirect path is the only reliable one.
-    static const uint8_t ff[256] = {
-        [0 ... 255] = 0xFF,
+    // 0xFF". Fill the 4KB block via OSPI_MMWrite() (memory-mapped, one
+    // continuous burst). A memset through the memory-mapped window was
+    // tried as a fast path once before and faulted (IMPRECISERR) --
+    // that was the same DQS errata 2.8.6 OSPI_MMWrite() now works around;
+    // see its doc comment for the two fixes this needed (DQS + the
+    // Strongly Ordered MPU toggle).
+    static const uint8_t ff[4096] = {
+        [0 ... 4095] = 0xFF,
     };
 
-    for (uint32_t off = 0; off < 0x1000; off += sizeof(ff)) {
-        OSPI_PageProgram(address + off, ff, sizeof(ff));
-    }
+    OSPI_MMWrite(address, ff, sizeof(ff));
 }
 
 void OSPI_ChipErase(void)
@@ -687,26 +713,116 @@ void OSPI_NOR_WriteEnable(void)
     // PSRAM does not have (or need) a Write Enable latch.
 }
 
+/* Writes `len` bytes at `address` straight through the memory-mapped
+ * pointer at 0x90000000, instead of chunked indirect OSPI_PageProgram()
+ * commands. PSRAM-specific (assumes flash.config == &config_psram, true
+ * unconditionally on this branch -- see OSPI_Init()); would need a real
+ * indirect fallback if this file's NOR-flash config paths were ever
+ * reactivated, since NOR write timing/WREN/WIP semantics don't apply
+ * here at all.
+ *
+ * Two independent hardware issues had to be fixed before this was safe,
+ * both confirmed on real STM32H7B0 hardware and both required together:
+ *
+ *  1. STM32H72x/73x errata 2.8.6 ("Memory-mapped write error response
+ *     when DQS output is disabled") -- fixed in
+ *     OSPI_EnableMemoryMappedMode()'s write config (DQSMode = ENABLE,
+ *     even though this PSRAM has no physical DQS pin). Without it, any
+ *     memory-mapped write faults immediately, down to a single word.
+ *  2. D-Cache write-back reordering a multi-word burst relative to what
+ *     the OCTOSPI peripheral's SPI protocol expects for one continuous
+ *     transaction -- fixed by mpu_set_psram_writable(true) (main.c),
+ *     which makes this whole window Strongly Ordered for the duration
+ *     of the write. Without it, a single word still works (nothing to
+ *     reorder) but bursts of ~256+ words hang inside
+ *     HAL_OSPI_Abort()'s wait-for-flag timeout.
+ *
+ * Strongly Ordered memory does not permit unaligned access at all (an
+ * ARM architecture rule), so mpu_set_psram_writable(false) afterward is
+ * just as mandatory as (true) before -- leaving it on breaks ordinary
+ * unaligned reads from gameplay code (confirmed: broke Zelda3 within
+ * seconds of normal play when this was tried as a permanent region). */
+/* true while a caller has bracketed a run of writes with
+ * OSPI_BeginWriteBatch()/OSPI_EndWriteBatch() -- lets OSPI_MMWrite() skip
+ * its own per-call mode setup/teardown when the caller already did it
+ * once for the whole run. See OSPI_BeginWriteBatch()'s doc comment for
+ * why this exists: paying the setup/teardown cost on every 256-byte
+ * chunk (thousands of times per large ROM) makes the actually-faster
+ * memory-mapped write path measure no faster than the old indirect one
+ * in practice, since the fixed per-chunk overhead dominates. */
+static bool s_write_batch_active = false;
+
+/* Brackets a run of OSPI_Program()/_OSPI_Erase() calls so the
+ * mpu_set_psram_writable()/OSPI_EnableMemoryMappedMode() setup and
+ * OSPI_DisableMemoryMappedMode()/mpu_set_psram_writable()/
+ * OSPI_EnableMemoryMappedMode() teardown happen ONCE for the whole run,
+ * not once per call. circular_flash_write() (gw_flash_alloc.c) is the
+ * one call site worth this -- it can call OSPI_Program() thousands of
+ * times for a single large ROM. Every other caller of OSPI_Program()
+ * (gw_littlefs.c, rg_selftest.c, rg_emulators.c) keeps calling it
+ * directly, unbracketed -- OSPI_MMWrite() still does its own
+ * self-contained setup/teardown for those, exactly as before, so nothing
+ * else needs to change or is any less safe. Safe to call redundantly
+ * (idempotent, matches OSPI_Enable/DisableMemoryMappedMode()'s own
+ * idempotent guards) -- not currently nested/reentrant-safe, but nothing
+ * here runs from an interrupt context that would need that. */
+void OSPI_BeginWriteBatch(void)
+{
+    if (s_write_batch_active) {
+        return;
+    }
+    mpu_set_psram_writable(true);
+    OSPI_EnableMemoryMappedMode();
+    s_write_batch_active = true;
+}
+
+void OSPI_EndWriteBatch(void)
+{
+    if (!s_write_batch_active) {
+        return;
+    }
+    OSPI_DisableMemoryMappedMode();
+    mpu_set_psram_writable(false);
+    OSPI_EnableMemoryMappedMode();
+    s_write_batch_active = false;
+}
+
+static void OSPI_MMWrite(uint32_t address, const uint8_t *data, size_t len)
+{
+    volatile uint8_t *p = (volatile uint8_t *)(0x90000000u + address);
+    size_t i = 0;
+    bool own_batch = !s_write_batch_active;
+
+    if (own_batch) {
+        mpu_set_psram_writable(true);
+        OSPI_EnableMemoryMappedMode();
+    }
+
+    for (; i + 4 <= len; i += 4) {
+        uint32_t val;
+        memcpy(&val, data + i, 4);
+        *(volatile uint32_t *)(p + i) = val;
+        if ((i & 0xFFFu) == 0) wdog_refresh();
+    }
+    for (; i < len; i++) {
+        p[i] = data[i];
+    }
+    wdog_refresh();
+
+    if (own_batch) {
+        OSPI_DisableMemoryMappedMode();
+        mpu_set_psram_writable(false);
+        OSPI_EnableMemoryMappedMode();
+    }
+}
+
 void OSPI_Program(uint32_t address,
                   const uint8_t *buffer,
                   size_t buffer_size)
 {
-    unsigned iterations = (buffer_size + 255) / 256;
-    unsigned dest_page = address / 256;
-
     assert((address & 0xff) == 0);
 
-    for (int i = 0; i < iterations; i++) {
-        OSPI_PageProgram((i + dest_page) * 256,
-                         buffer + (i * 256),
-                         buffer_size > 256 ? 256 : buffer_size);
-        buffer_size -= 256;
-        // ~1ms per 256B page; 137KB save = 536 pages = ~536ms total
-        // wait — past the ~472ms WWDG window at 280MHz. Refresh per
-        // page so the loop never accumulates more than ~1ms of
-        // un-kicked time, regardless of buffer length.
-        wdog_refresh();
-    }
+    OSPI_MMWrite(address, buffer, buffer_size);
 }
 
 void OSPI_ReadJedecId(uint8_t dest[3])

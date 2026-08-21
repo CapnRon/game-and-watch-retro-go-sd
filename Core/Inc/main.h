@@ -259,6 +259,15 @@ int odroid_overlay_draw_text_line(uint16_t x_pos, uint16_t y_pos, uint16_t width
  * only writes the region descriptors. */
 void mpu_set_lcd_pool_uncached_range(uint32_t framebuffer_bytes);
 
+/* Toggles MPU region 7 (0x90000000, OSPI1 memory-mapped PSRAM window)
+ * between Strongly Ordered (writable=true, required for safe
+ * memory-mapped writes) and disabled/default-cacheable (writable=false,
+ * required for reads -- Strongly Ordered doesn't permit unaligned
+ * access at all). See the doc comment in main.c for the full story and
+ * why getting this wrong breaks either writes or reads. Self-contained
+ * MPU Disable/Enable bracket. */
+void mpu_set_psram_writable(bool writable);
+
 #ifdef __cplusplus
 }
 #endif

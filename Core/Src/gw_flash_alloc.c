@@ -356,7 +356,15 @@ static bool circular_flash_write(const char *file_path,
     // Translates the address to an offset into external flash.
     uint32_t address_in_flash = flash_write_pointer - (uint32_t)&__EXTFLASH_BASE__;
 
-    OSPI_DisableMemoryMappedMode();
+    /* Brackets the whole erase+program loop below (both now go through
+     * the memory-mapped write path -- OSPI_Erase()/_OSPI_Erase() and
+     * OSPI_Program() both call into OSPI_MMWrite()) with ONE mode
+     * setup/teardown instead of one per OSPI_Program() call -- otherwise
+     * the fixed per-chunk setup/teardown cost (thousands of times for a
+     * large ROM) dominates over the actual transfer time and the
+     * memory-mapped path measures no faster than the old indirect one.
+     * See OSPI_BeginWriteBatch()'s doc comment (gw_flash.c). */
+    OSPI_BeginWriteBatch();
 
     *flash_address_out = flash_write_pointer;
 
@@ -425,7 +433,7 @@ static bool circular_flash_write(const char *file_path,
                file_path, (unsigned long)total_bytes_processed);
     }
 
-    OSPI_EnableMemoryMappedMode();
+    OSPI_EndWriteBatch();
     fclose(file);
 
     /* The next file must start on an erase-block boundary (the old loop

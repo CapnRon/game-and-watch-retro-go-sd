@@ -23,6 +23,18 @@ void OSPI_PageProgram(uint32_t address, const uint8_t *buffer, size_t buffer_siz
 void OSPI_NOR_WriteEnable(void);
 void OSPI_Program(uint32_t address, const uint8_t *buffer, size_t buffer_size);
 
+/* Bracket a run of OSPI_Program()/OSPI_Erase() calls with these so the
+ * memory-mapped-write setup/teardown (MPU toggle + OSPI mode enable)
+ * happens once for the whole run instead of once per call -- worth it
+ * for a loop calling OSPI_Program() many times (e.g.
+ * circular_flash_write() caching a large ROM), since the fixed
+ * per-call setup/teardown cost otherwise dominates over the actual
+ * transfer time. See gw_flash.c's doc comment on OSPI_BeginWriteBatch()
+ * for the full reasoning. Optional -- every OSPI_Program()/OSPI_Erase()
+ * call remains safe and self-contained without this. */
+void OSPI_BeginWriteBatch(void);
+void OSPI_EndWriteBatch(void);
+
 /* Indirect read with the configured read command (PSRAM: 0xEB quad). */
 void OSPI_IndirectRead(uint32_t address, uint8_t *data, size_t len);
 
